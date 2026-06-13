@@ -3,7 +3,7 @@ import { generateText, Output } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { queryOne, query } from "@/lib/db";
-import type { DataProfile, PipelineRun } from "@/lib/types";
+import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@/lib/types";
 
 const ruleSchema = z.object({
   rule_type: z.enum([
@@ -34,11 +34,53 @@ export async function POST(req: NextRequest) {
   const { run_id } = await req.json();
   if (!run_id) return NextResponse.json({ error: "run_id required" }, { status: 400 });
 
-  const run = await queryOne<PipelineRun>(
-    "SELECT * FROM pipeline_runs WHERE id = $1",
+  const run = await queryOne<PipelineRun & { template_id: string | null }>(
+    `SELECT pr.*, p.template_id
+     FROM pipeline_runs pr
+     JOIN pipelines p ON pr.pipeline_id = p.id
+     WHERE pr.id = $1`,
     [run_id]
   );
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+
+  // Short-circuit: if pipeline was created from a template, use its rules directly
+  if (run.template_id) {
+    const template = await queryOne<PipelineTemplate>(
+      "SELECT * FROM pipeline_templates WHERE id = $1",
+      [run.template_id]
+    );
+    if (template?.transform_rules?.length) {
+      const rules: TemplateRule[] = Array.isArray(template.transform_rules)
+        ? template.transform_rules
+        : (template.transform_rules as unknown as TemplateRule[]);
+
+      await Promise.all(
+        rules.map((rule, idx) =>
+          queryOne(
+            `INSERT INTO transform_rules
+               (pipeline_id, run_id, rule_type, column_name, parameters, ai_reasoning, status, order_index)
+             VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
+            [
+              run.pipeline_id,
+              run_id,
+              rule.rule_type,
+              rule.column_name,
+              JSON.stringify(rule.parameters),
+              rule.ai_reasoning,
+              idx,
+            ]
+          )
+        )
+      );
+
+      await queryOne(
+        "UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1",
+        [run_id]
+      );
+
+      return NextResponse.json({ ok: true, rules_count: rules.length, source: "template" });
+    }
+  }
 
   const profile = await queryOne<DataProfile>(
     "SELECT * FROM data_profiles WHERE run_id = $1 AND stage = 'raw'",
