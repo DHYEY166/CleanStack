@@ -7,6 +7,7 @@ import type { PipelineRun, DataProfile, TransformRule } from "@/lib/types";
 import QualityGauge from "@/components/QualityGauge";
 import ColumnStatsTable from "@/components/ColumnStatsTable";
 import QualityTrendChart from "@/components/QualityTrendChart";
+import SchemaDiffViewer from "@/components/SchemaDiffViewer";
 
 export default async function RunDetailPage({
   params,
@@ -25,7 +26,7 @@ export default async function RunDetailPage({
   );
   if (!run) notFound();
 
-  const [rawProfile, processedProfile, rules, trendRuns] = await Promise.all([
+  const [rawProfile, processedProfile, rules, trendRuns, schemaDriftData] = await Promise.all([
     queryOne<DataProfile>(
       "SELECT * FROM data_profiles WHERE run_id = $1 AND stage = 'raw'",
       [rid]
@@ -45,6 +46,15 @@ export default async function RunDetailPage({
        WHERE pr.pipeline_id = $1 AND pr.status = 'completed'
        ORDER BY pr.created_at ASC
        LIMIT 20`,
+      [run.pipeline_id]
+    ),
+    // Fetch this run's schema snapshot + previous one to detect drift
+    query<{ schema_hash: string; column_definitions: Record<string, string>; created_at: string }>(
+      `SELECT schema_hash, column_definitions, created_at
+       FROM schema_snapshots
+       WHERE pipeline_id = $1
+       ORDER BY created_at DESC
+       LIMIT 2`,
       [run.pipeline_id]
     ),
   ]);
@@ -72,6 +82,25 @@ export default async function RunDetailPage({
     rawProfile?.quality_score != null && processedProfile?.quality_score != null
       ? processedProfile.quality_score - rawProfile.quality_score
       : null;
+
+  // Build schema diff if two snapshots exist and hashes differ
+  let schemaDiff: { added: Record<string, string>; removed: Record<string, string>; type_changed: Record<string, { from: string; to: string }> } | null = null;
+  if (schemaDriftData.length === 2) {
+    const [current, previous] = schemaDriftData;
+    if (current.schema_hash !== previous.schema_hash) {
+      const oldCols = previous.column_definitions as Record<string, string>;
+      const newCols = current.column_definitions as Record<string, string>;
+      schemaDiff = {
+        added: Object.fromEntries(Object.entries(newCols).filter(([k]) => !(k in oldCols))),
+        removed: Object.fromEntries(Object.entries(oldCols).filter(([k]) => !(k in newCols))),
+        type_changed: Object.fromEntries(
+          Object.entries(oldCols)
+            .filter(([k]) => k in newCols && oldCols[k] !== newCols[k])
+            .map(([k]) => [k, { from: oldCols[k], to: newCols[k] }])
+        ),
+      };
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-950">
@@ -219,6 +248,17 @@ export default async function RunDetailPage({
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
             <h2 className="text-lg font-semibold text-white mb-4">Quality Trend</h2>
             <QualityTrendChart data={trendData} />
+          </div>
+        )}
+
+        {/* Schema drift */}
+        {schemaDiff && (
+          <div className="bg-gray-900 border border-yellow-500/30 rounded-xl p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-yellow-400 text-lg">⚠</span>
+              <h2 className="text-lg font-semibold text-white">Schema Drift Detected</h2>
+            </div>
+            <SchemaDiffViewer diff={schemaDiff} />
           </div>
         )}
 
