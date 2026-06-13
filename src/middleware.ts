@@ -3,7 +3,6 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 const isProtectedRoute = createRouteMatcher([
   "/dashboard(.*)",
   "/pipelines(.*)",
-  "/templates(.*)",
   "/api/upload(.*)",
   "/api/suggest-transforms(.*)",
   "/api/approve-rules(.*)",
