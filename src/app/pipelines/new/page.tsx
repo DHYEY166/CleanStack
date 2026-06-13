@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
+import PipelineChat from "@/components/PipelineChat";
 
 const ACCEPTED_TYPES = [
   ".csv", ".tsv", ".txt", ".json", ".jsonl",
@@ -16,15 +17,19 @@ const FORMAT_LABELS: Record<string, string> = {
   png: "Image", xml: "XML", parquet: "Parquet",
 };
 
+type Tab = "upload" | "chat";
+type Step = "form" | "uploading" | "processing";
+
 export default function NewPipelinePage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const [tab, setTab] = useState<Tab>("upload");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [step, setStep] = useState<"form" | "uploading" | "processing">("form");
+  const [step, setStep] = useState<Step>("form");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
 
@@ -38,6 +43,12 @@ export default function NewPipelinePage() {
     setError(null);
   }
 
+  function handleChatApply(appliedName: string, appliedDescription: string) {
+    setName(appliedName);
+    setDescription(appliedDescription);
+    setTab("upload");
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !file) return;
@@ -46,7 +57,6 @@ export default function NewPipelinePage() {
     setProgress(10);
 
     try {
-      // 1. Create pipeline
       const pipelineRes = await fetch("/api/pipelines", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -56,7 +66,6 @@ export default function NewPipelinePage() {
       if (pErr) throw new Error(pErr);
       setProgress(25);
 
-      // 2. Get presigned URL
       const uploadRes = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -70,7 +79,6 @@ export default function NewPipelinePage() {
       if (uErr) throw new Error(uErr);
       setProgress(40);
 
-      // 3. Upload to S3
       await fetch(presigned_url, {
         method: "PUT",
         body: file,
@@ -79,7 +87,6 @@ export default function NewPipelinePage() {
       setProgress(70);
       setStep("processing");
 
-      // 4. Poll for status
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
@@ -111,13 +118,42 @@ export default function NewPipelinePage() {
       <Nav />
       <main className="max-w-2xl mx-auto px-6 py-12">
         <h1 className="text-2xl font-bold text-white mb-2">New Pipeline</h1>
-        <p className="text-gray-400 text-sm mb-8">
-          Upload your data file and CleanStack will profile it automatically.
+        <p className="text-gray-400 text-sm mb-6">
+          Upload your data file directly, or describe your problem and let AI configure the pipeline.
         </p>
 
-        {step === "form" && (
+        {/* Tabs */}
+        <div className="flex gap-1 mb-8 bg-gray-900 border border-gray-800 rounded-xl p-1">
+          {(["upload", "chat"] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
+                tab === t
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-400 hover:text-white"
+              }`}
+            >
+              {t === "upload" ? "📁 Upload File" : "✨ Chat Builder"}
+            </button>
+          ))}
+        </div>
+
+        {/* Chat tab */}
+        {tab === "chat" && (
+          <PipelineChat onApply={handleChatApply} />
+        )}
+
+        {/* Upload tab */}
+        {tab === "upload" && step === "form" && (
           <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Name */}
+            {/* Applied-from-chat banner */}
+            {name && (
+              <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-lg px-4 py-3 text-indigo-300 text-sm">
+                Config applied from Chat Builder — review and upload your file.
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
                 Pipeline name <span className="text-red-400">*</span>
@@ -132,7 +168,6 @@ export default function NewPipelinePage() {
               />
             </div>
 
-            {/* Description */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
                 Description <span className="text-gray-500">(optional)</span>
@@ -146,7 +181,6 @@ export default function NewPipelinePage() {
               />
             </div>
 
-            {/* File upload */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-1.5">
                 Data file <span className="text-red-400">*</span>
