@@ -1,0 +1,86 @@
+import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
+import { query, queryOne } from "@/lib/db";
+
+interface RuleDecision {
+  rule_id: string;
+  action: "approved" | "rejected";
+  modifications: Record<string, unknown> | null;
+}
+
+const sqs = new SQSClient({ region: process.env.AWS_REGION ?? "us-east-1" });
+
+export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await req.json();
+  const { run_id, rule_decisions } = body as {
+    run_id: string;
+    rule_decisions: RuleDecision[];
+  };
+
+  if (!run_id || !Array.isArray(rule_decisions)) {
+    return NextResponse.json({ error: "run_id and rule_decisions required" }, { status: 400 });
+  }
+
+  const run = await queryOne<{ id: string; pipeline_id: string; status: string }>(
+    `SELECT pr.id, pr.pipeline_id, pr.status
+     FROM pipeline_runs pr
+     JOIN pipelines p ON pr.pipeline_id = p.id
+     WHERE pr.id = $1 AND p.team_id = $2`,
+    [run_id, userId]
+  );
+
+  if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  if (run.status !== "awaiting_approval") {
+    return NextResponse.json({ error: "Run is not awaiting approval" }, { status: 409 });
+  }
+
+  await Promise.all(
+    rule_decisions.map((d) => {
+      const params = d.modifications
+        ? JSON.stringify(d.modifications)
+        : null;
+      return query(
+        `UPDATE transform_rules
+         SET status = $2${params ? ", parameters = $3" : ""}
+         WHERE id = $1`,
+        params ? [d.rule_id, d.action, params] : [d.rule_id, d.action]
+      );
+    })
+  );
+
+  const ruleChanges = Object.fromEntries(
+    rule_decisions.map((d) => [d.rule_id, { action: d.action, modifications: d.modifications }])
+  );
+
+  await queryOne(
+    `INSERT INTO approval_reviews (run_id, reviewer_id, action, rule_changes)
+     VALUES ($1, $2, 'approved', $3)`,
+    [run_id, userId, JSON.stringify(ruleChanges)]
+  );
+
+  const approvedCount = rule_decisions.filter((d) => d.action === "approved").length;
+
+  if (approvedCount > 0 && process.env.SQS_QUEUE_URL) {
+    await sqs.send(
+      new SendMessageCommand({
+        QueueUrl: process.env.SQS_QUEUE_URL,
+        MessageBody: JSON.stringify({ run_id }),
+      })
+    );
+    await queryOne(
+      "UPDATE pipeline_runs SET status = 'queued' WHERE id = $1",
+      [run_id]
+    );
+  } else {
+    await queryOne(
+      "UPDATE pipeline_runs SET status = 'completed' WHERE id = $1",
+      [run_id]
+    );
+  }
+
+  return NextResponse.json({ ok: true });
+}
