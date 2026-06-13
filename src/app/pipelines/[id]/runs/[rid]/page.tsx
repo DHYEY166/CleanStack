@@ -4,6 +4,9 @@ import Link from "next/link";
 import Nav from "@/components/Nav";
 import { queryOne, query } from "@/lib/db";
 import type { PipelineRun, DataProfile, TransformRule } from "@/lib/types";
+import QualityGauge from "@/components/QualityGauge";
+import ColumnStatsTable from "@/components/ColumnStatsTable";
+import QualityTrendChart from "@/components/QualityTrendChart";
 
 export default async function RunDetailPage({
   params,
@@ -22,7 +25,7 @@ export default async function RunDetailPage({
   );
   if (!run) notFound();
 
-  const [rawProfile, processedProfile, rules] = await Promise.all([
+  const [rawProfile, processedProfile, rules, trendRuns] = await Promise.all([
     queryOne<DataProfile>(
       "SELECT * FROM data_profiles WHERE run_id = $1 AND stage = 'raw'",
       [rid]
@@ -35,7 +38,24 @@ export default async function RunDetailPage({
       "SELECT * FROM transform_rules WHERE run_id = $1 ORDER BY order_index ASC",
       [rid]
     ),
+    query<{ id: string; created_at: string; quality_score: number | null }>(
+      `SELECT pr.id, pr.created_at, dp.quality_score
+       FROM pipeline_runs pr
+       LEFT JOIN data_profiles dp ON dp.run_id = pr.id AND dp.stage = 'processed'
+       WHERE pr.pipeline_id = $1 AND pr.status = 'completed'
+       ORDER BY pr.created_at ASC
+       LIMIT 20`,
+      [run.pipeline_id]
+    ),
   ]);
+
+  const trendData = trendRuns
+    .filter((r) => r.quality_score != null)
+    .map((r, i) => ({
+      run_index: i + 1,
+      score: r.quality_score!,
+      label: `#${i + 1}`,
+    }));
 
   const statusColors: Record<string, string> = {
     pending: "text-yellow-400",
@@ -48,10 +68,15 @@ export default async function RunDetailPage({
     failed: "text-red-400",
   };
 
+  const delta =
+    rawProfile?.quality_score != null && processedProfile?.quality_score != null
+      ? processedProfile.quality_score - rawProfile.quality_score
+      : null;
+
   return (
     <div className="min-h-screen bg-gray-950">
       <Nav />
-      <main className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         {/* Breadcrumb */}
         <div className="text-sm text-gray-500">
           <Link href="/dashboard" className="hover:text-gray-300">Dashboard</Link>
@@ -62,7 +87,7 @@ export default async function RunDetailPage({
         </div>
 
         {/* Status banner */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-between">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-between flex-wrap gap-4">
           <div>
             <div className="text-sm text-gray-400 mb-1">Status</div>
             <div className={`text-lg font-semibold capitalize ${statusColors[run.status] ?? "text-gray-300"}`}>
@@ -77,58 +102,48 @@ export default async function RunDetailPage({
           )}
           {run.row_count_raw != null && (
             <div className="text-right">
-              <div className="text-sm text-gray-400 mb-1">Rows</div>
+              <div className="text-sm text-gray-400 mb-1">Rows (raw)</div>
               <div className="text-white font-medium">{run.row_count_raw.toLocaleString()}</div>
+            </div>
+          )}
+          {run.row_count_processed != null && (
+            <div className="text-right">
+              <div className="text-sm text-gray-400 mb-1">Rows (processed)</div>
+              <div className="text-white font-medium">{run.row_count_processed.toLocaleString()}</div>
             </div>
           )}
         </div>
 
-        {/* Quality scores */}
+        {/* Quality score gauges */}
         {(rawProfile || processedProfile) && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
             <h2 className="text-lg font-semibold text-white mb-6">Data Quality Score</h2>
-            <div className="flex items-center justify-around">
-              <div className="text-center">
-                <div
-                  className={`text-6xl font-bold ${
-                    (rawProfile?.quality_score ?? 0) < 50
-                      ? "text-red-400"
-                      : (rawProfile?.quality_score ?? 0) < 75
-                      ? "text-yellow-400"
-                      : "text-green-400"
-                  }`}
-                >
-                  {rawProfile?.quality_score ?? "—"}
-                </div>
-                <div className="text-gray-400 text-sm mt-2">Before</div>
+            <div className="flex items-end justify-around gap-4 flex-wrap">
+              <QualityGauge score={rawProfile?.quality_score ?? null} label="Before" />
+
+              <div className="flex flex-col items-center gap-1 pb-6">
+                <div className="text-gray-600 text-2xl">→</div>
               </div>
 
-              <div className="text-gray-600 text-3xl">→</div>
+              <QualityGauge score={processedProfile?.quality_score ?? null} label="After" />
 
-              <div className="text-center">
-                <div
-                  className={`text-6xl font-bold ${
-                    processedProfile
-                      ? (processedProfile.quality_score ?? 0) >= 75
-                        ? "text-green-400"
-                        : "text-yellow-400"
-                      : "text-gray-600"
-                  }`}
-                >
-                  {processedProfile?.quality_score ?? "—"}
-                </div>
-                <div className="text-gray-400 text-sm mt-2">After</div>
-              </div>
-
-              {rawProfile?.quality_score != null && processedProfile?.quality_score != null && (
-                <div className="text-center">
-                  <div className="text-4xl font-bold text-indigo-400">
-                    +{processedProfile.quality_score - rawProfile.quality_score}
+              {delta != null && (
+                <div className="flex flex-col items-center gap-1 pb-6">
+                  <div className={`text-3xl font-bold ${delta >= 0 ? "text-indigo-400" : "text-red-400"}`}>
+                    {delta >= 0 ? "+" : ""}{delta}
                   </div>
-                  <div className="text-gray-400 text-sm mt-2">Improvement</div>
+                  <div className="text-gray-400 text-sm">Improvement</div>
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Column stats — raw profile */}
+        {rawProfile?.column_stats && Object.keys(rawProfile.column_stats).length > 0 && (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <h2 className="text-lg font-semibold text-white mb-4">Column Profile (Raw)</h2>
+            <ColumnStatsTable columnStats={rawProfile.column_stats} />
           </div>
         )}
 
@@ -167,7 +182,7 @@ export default async function RunDetailPage({
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="text-white text-sm font-medium">
                           {rule.rule_type.replace(/_/g, " ")}
                         </span>
@@ -199,12 +214,26 @@ export default async function RunDetailPage({
           </div>
         )}
 
-        {/* Empty states */}
-        {run.status === "pending" || run.status === "profiling" ? (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-            <p className="text-gray-400">Profiling your data... check back in a few seconds.</p>
+        {/* Quality trend chart */}
+        {trendData.length >= 2 && (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <h2 className="text-lg font-semibold text-white mb-4">Quality Trend</h2>
+            <QualityTrendChart data={trendData} />
           </div>
-        ) : null}
+        )}
+
+        {/* Empty/loading states */}
+        {(run.status === "pending" || run.status === "profiling") && (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+            <p className="text-gray-400">Profiling your data… check back in a few seconds.</p>
+          </div>
+        )}
+
+        {run.status === "awaiting_ai" && (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+            <p className="text-gray-400">Claude is analyzing your data…</p>
+          </div>
+        )}
 
         {run.status === "failed" && run.error_message && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm">
