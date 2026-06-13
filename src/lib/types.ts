@@ -77,6 +77,26 @@ export interface TransformRule {
   created_at: string;
 }
 
+export interface TemplateRule {
+  rule_type: string;
+  column_name: string | null;
+  parameters: Record<string, unknown>;
+  ai_reasoning: string;
+}
+
+export interface PipelineTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+  author_id: string;
+  is_public: boolean;
+  use_count: number;
+  transform_rules: TemplateRule[];
+  sample_input_schema: Record<string, string> | null;
+  created_at: string;
+}
+
 export interface ApprovalReview {
   id: string;
   run_id: string;
