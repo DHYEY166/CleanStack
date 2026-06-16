@@ -4,7 +4,6 @@ const isProtectedRoute = createRouteMatcher([
   "/dashboard(.*)",
   "/pipelines(.*)",
   "/api/upload(.*)",
-  "/api/suggest-transforms(.*)",
   "/api/approve-rules(.*)",
   "/api/run-status(.*)",
   "/api/templates(.*)",
