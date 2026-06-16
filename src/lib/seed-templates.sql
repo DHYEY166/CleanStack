@@ -26,6 +26,7 @@ VALUES
   'Cleans order exports from Shopify/WooCommerce: numeric totals, datetime parsing, deduplication by order ID, filters cancelled orders.',
   'E-commerce',
   'system',
+  true,
   98,
   '[
     {"rule_type":"type_cast","column_name":"order_total","parameters":{"target_type":"float"},"ai_reasoning":"Order totals exported as strings must be numeric for revenue aggregation."},
@@ -42,6 +43,7 @@ VALUES
   'Standardizes bank statement and expense report exports: numeric amounts, datetime transactions, fills uncategorized entries.',
   'Finance',
   'system',
+  true,
   76,
   '[
     {"rule_type":"type_cast","column_name":"amount","parameters":{"target_type":"float"},"ai_reasoning":"Financial amounts must be numeric for sum, average, and variance calculations."},
@@ -58,6 +60,7 @@ VALUES
   'Prepares employee roster exports for HRIS import: enforces employee ID, deduplicates, normalizes salary, fills missing manager.',
   'HR',
   'system',
+  true,
   54,
   '[
     {"rule_type":"drop_nulls","column_name":"employee_id","parameters":{},"ai_reasoning":"Records without employee IDs cannot be processed by any HRIS system."},

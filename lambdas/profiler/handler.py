@@ -1,42 +1,19 @@
 import json
 import os
 import io
-import hashlib
 import boto3
 import psycopg2
 import requests
 import pandas as pd
 import numpy as np
-from anthropic import Anthropic
 
 s3 = boto3.client("s3")
 secrets = boto3.client("secretsmanager")
 
-ANTHROPIC_CLIENT = None
-
 
 def get_db_conn():
-    secret = json.loads(
-        secrets.get_secret_value(SecretId=os.environ["DB_SECRET_ARN"])["SecretString"]
-    )
-    return psycopg2.connect(
-        host=secret["host"],
-        port=secret.get("port", 5432),
-        dbname=secret.get("dbname", "cleanstack"),
-        user=secret["username"],
-        password=secret["password"],
-        sslmode="require",
-    )
-
-
-def get_anthropic():
-    global ANTHROPIC_CLIENT
-    if ANTHROPIC_CLIENT is None:
-        secret = json.loads(
-            secrets.get_secret_value(SecretId=os.environ["ANTHROPIC_SECRET_ARN"])["SecretString"]
-        )
-        ANTHROPIC_CLIENT = Anthropic(api_key=secret["api_key"])
-    return ANTHROPIC_CLIENT
+    url = os.environ["DATABASE_URL"]
+    return psycopg2.connect(url, sslmode="require")
 
 
 def detect_format(key: str, content_type: str) -> str:
@@ -48,7 +25,6 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
     buf = io.BytesIO(file_bytes)
 
     if fmt in ("csv", "txt"):
-        # Auto-detect separator
         sample = file_bytes[:4096].decode("utf-8", errors="replace")
         sep = "\t" if sample.count("\t") > sample.count(",") else ","
         return pd.read_csv(io.BytesIO(file_bytes), sep=sep, low_memory=False)
@@ -67,66 +43,10 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
 
     elif fmt in ("xlsx", "xls"):
         xl = pd.ExcelFile(buf)
-        # Return first sheet (multi-sheet handled separately)
         return xl.parse(xl.sheet_names[0])
 
-    elif fmt == "pdf":
-        import pdfplumber
-        with pdfplumber.open(buf) as pdf:
-            tables = []
-            for page in pdf.pages:
-                for t in page.extract_tables():
-                    tables.append(t)
-            if not tables:
-                raise ValueError("No tables found in PDF")
-            # Use largest table
-            largest = max(tables, key=len)
-            headers = largest[0]
-            rows = largest[1:]
-            return pd.DataFrame(rows, columns=headers)
-
-    elif fmt in ("jpg", "jpeg", "png"):
-        import base64
-        client = get_anthropic()
-        b64 = base64.standard_b64encode(file_bytes).decode("utf-8")
-        mime = "image/jpeg" if fmt in ("jpg", "jpeg") else "image/png"
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": mime, "data": b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "Extract all structured data from this document. "
-                            "Output ONLY a JSON array of objects where each object is one row "
-                            "and keys are column names. No explanation, just the JSON array."
-                        ),
-                    },
-                ],
-            }],
-        )
-        data = json.loads(msg.content[0].text)
-        return pd.DataFrame(data)
-
-    elif fmt == "xml":
-        from lxml import etree
-        root = etree.fromstring(file_bytes)
-        rows = []
-        for child in root:
-            rows.append({sub.tag: sub.text for sub in child})
-        return pd.DataFrame(rows)
-
-    elif fmt == "parquet":
-        return pd.read_parquet(buf)
-
     else:
-        raise ValueError(f"Unsupported format: {fmt}")
+        raise ValueError(f"Unsupported format: {fmt}. Supported: csv, tsv, json, jsonl, xlsx, xls")
 
 
 def compute_quality_score(df: pd.DataFrame) -> dict:
