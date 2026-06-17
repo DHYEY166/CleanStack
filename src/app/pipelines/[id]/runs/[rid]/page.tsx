@@ -10,6 +10,7 @@ import QualityTrendChart from "@/components/QualityTrendChart";
 import SchemaDiffViewer from "@/components/SchemaDiffViewer";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import DownloadButton from "@/components/DownloadButton";
 
 export default async function RunDetailPage({
   params,
@@ -157,13 +158,13 @@ export default async function RunDetailPage({
             </div>
           )}
           {downloadUrl && (
-            <a
-              href={downloadUrl}
-              download
-              className="ml-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              ↓ Download Clean CSV
-            </a>
+            <div className="ml-auto">
+              <DownloadButton
+                presignedUrl={downloadUrl}
+                inputFormat={run.file_format ?? "csv"}
+                runId={rid}
+              />
+            </div>
           )}
         </div>
 
