@@ -37,21 +37,32 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
     elif fmt == "tsv":
         return pd.read_csv(buf, sep="\t", low_memory=False)
 
-    elif fmt in ("json",):
+    elif fmt in ("json", "jsonl"):
+        text = file_bytes.decode("utf-8", errors="replace").strip()
+        if fmt == "jsonl" or (text and text[0] != "[" and text[0] != "{" is False and "\n" in text):
+            try:
+                return pd.read_json(io.BytesIO(file_bytes), lines=True)
+            except Exception:
+                pass
         try:
-            return pd.read_json(buf)
+            return pd.read_json(io.BytesIO(file_bytes))
         except Exception:
-            return pd.read_json(buf, lines=True)
-
-    elif fmt == "jsonl":
-        return pd.read_json(buf, lines=True)
+            return pd.read_json(io.BytesIO(file_bytes), lines=True)
 
     elif fmt in ("xlsx", "xls"):
         xl = pd.ExcelFile(buf)
         return xl.parse(xl.sheet_names[0])
 
+    elif fmt == "xml":
+        from lxml import etree
+        root = etree.fromstring(file_bytes)
+        rows = [{child.tag: child.text for child in elem} for elem in root]
+        if not rows:
+            rows = [{root.tag: root.text}]
+        return pd.DataFrame(rows)
+
     else:
-        raise ValueError(f"Unsupported format: {fmt}. Supported: csv, tsv, json, jsonl, xlsx, xls")
+        raise ValueError(f"Unsupported format: {fmt}. Supported: csv, tsv, txt, json, jsonl, xlsx, xls, xml")
 
 
 def compute_quality_score(df: pd.DataFrame) -> dict:

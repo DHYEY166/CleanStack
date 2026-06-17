@@ -47,7 +47,9 @@ def load_raw_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
     elif fmt == "xml":
         from lxml import etree
         root = etree.fromstring(file_bytes)
-        rows = [{sub.tag: sub.text for sub in child} for child in root]
+        rows = [{child.tag: child.text for child in elem} for elem in root]
+        if not rows:
+            rows = [{sub.tag: sub.text for sub in root}]
         return pd.DataFrame(rows)
     elif fmt == "parquet":
         return pd.read_parquet(buf)
