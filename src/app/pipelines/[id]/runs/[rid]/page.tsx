@@ -8,6 +8,8 @@ import QualityGauge from "@/components/QualityGauge";
 import ColumnStatsTable from "@/components/ColumnStatsTable";
 import QualityTrendChart from "@/components/QualityTrendChart";
 import SchemaDiffViewer from "@/components/SchemaDiffViewer";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export default async function RunDetailPage({
   params,
@@ -58,6 +60,19 @@ export default async function RunDetailPage({
       [run.pipeline_id]
     ),
   ]);
+
+  let downloadUrl: string | null = null;
+  if (run.status === "completed" && run.processed_s3_key) {
+    const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+    downloadUrl = await getSignedUrl(
+      s3,
+      new GetObjectCommand({
+        Bucket: process.env.S3_PROCESSED_BUCKET,
+        Key: run.processed_s3_key,
+      }),
+      { expiresIn: 3600 }
+    );
+  }
 
   const trendData = trendRuns
     .filter((r) => r.quality_score != null)
@@ -140,6 +155,15 @@ export default async function RunDetailPage({
               <div className="text-sm text-gray-400 mb-1">Rows (processed)</div>
               <div className="text-white font-medium">{run.row_count_processed.toLocaleString()}</div>
             </div>
+          )}
+          {downloadUrl && (
+            <a
+              href={downloadUrl}
+              download
+              className="ml-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              ↓ Download Clean CSV
+            </a>
           )}
         </div>
 
