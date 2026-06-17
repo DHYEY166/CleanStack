@@ -8,8 +8,6 @@ import QualityGauge from "@/components/QualityGauge";
 import ColumnStatsTable from "@/components/ColumnStatsTable";
 import QualityTrendChart from "@/components/QualityTrendChart";
 import SchemaDiffViewer from "@/components/SchemaDiffViewer";
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import DownloadButton from "@/components/DownloadButton";
 
 export default async function RunDetailPage({
@@ -62,18 +60,7 @@ export default async function RunDetailPage({
     ),
   ]);
 
-  let downloadUrl: string | null = null;
-  if (run.status === "completed" && run.processed_s3_key) {
-    const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
-    downloadUrl = await getSignedUrl(
-      s3,
-      new GetObjectCommand({
-        Bucket: process.env.S3_PROCESSED_BUCKET,
-        Key: run.processed_s3_key,
-      }),
-      { expiresIn: 3600 }
-    );
-  }
+  const canDownload = run.status === "completed" && !!run.processed_s3_key;
 
   const trendData = trendRuns
     .filter((r) => r.quality_score != null)
@@ -157,12 +144,11 @@ export default async function RunDetailPage({
               <div className="text-white font-medium">{run.row_count_processed.toLocaleString()}</div>
             </div>
           )}
-          {downloadUrl && (
+          {canDownload && (
             <div className="ml-auto">
               <DownloadButton
-                presignedUrl={downloadUrl}
-                inputFormat={run.file_format ?? "csv"}
                 runId={rid}
+                inputFormat={run.file_format ?? "csv"}
               />
             </div>
           )}
