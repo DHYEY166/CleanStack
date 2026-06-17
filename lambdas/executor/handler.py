@@ -55,42 +55,57 @@ def load_raw_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
         raise ValueError(f"Unsupported format for executor: {fmt}")
 
 
+def _parse_params(raw) -> dict:
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return raw or {}
+
+
+def _to_numeric_clean(series: pd.Series) -> pd.Series:
+    """Strip currency symbols/commas then coerce to numeric."""
+    cleaned = series.astype(str).str.replace(r"[$,\s]", "", regex=True)
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
 def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
     for rule in rules:
         rtype = rule["rule_type"]
         col = rule.get("column_name")
-        params = rule.get("parameters") or {}
+        params = _parse_params(rule.get("parameters"))
 
         try:
             if rtype == "drop_nulls":
-                if col:
+                if col and col in df.columns:
                     threshold = params.get("threshold", 0.0)
-                    if isinstance(threshold, float) and threshold < 1.0:
-                        # treat as fraction of non-null required
-                        min_count = int(len(df) * (1 - threshold))
+                    if isinstance(threshold, (int, float)) and float(threshold) < 1.0:
+                        min_count = int(len(df) * (1 - float(threshold)))
                         df = df.dropna(subset=[col], thresh=min_count)
                     else:
                         df = df.dropna(subset=[col])
-                else:
+                elif not col:
                     df = df.dropna()
 
             elif rtype == "deduplicate":
-                subset = [col] if col else None
-                df = df.drop_duplicates(subset=subset)
+                subset = [col] if col and col in df.columns else None
+                df = df.drop_duplicates(subset=subset, keep="first")
 
             elif rtype == "type_cast":
                 if col and col in df.columns:
                     target = params.get("target_type", "str")
-                    if target in ("float", "float64"):
-                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                    if target in ("float", "float64", "numeric", "number"):
+                        df[col] = _to_numeric_clean(df[col])
                     elif target in ("int", "int64"):
-                        df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+                        df[col] = _to_numeric_clean(df[col]).astype("Int64")
                     elif target == "str":
                         df[col] = df[col].astype(str)
-                    elif target in ("datetime", "date"):
-                        df[col] = pd.to_datetime(df[col], errors="coerce")
+                    elif target in ("datetime", "date", "timestamp"):
+                        df[col] = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
+                        df[col] = df[col].dt.strftime("%Y-%m-%d")
                     else:
-                        df[col] = df[col].astype(target)
+                        df[col] = df[col].astype(target, errors="ignore")
 
             elif rtype == "rename":
                 if col and col in df.columns:
@@ -109,26 +124,41 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                     elif operator == "neq":
                         df = df[df[col] != value]
                     elif operator == "gt":
-                        df = df[pd.to_numeric(df[col], errors="coerce") > float(value)]
+                        df = df[_to_numeric_clean(df[col]) > float(value)]
                     elif operator == "lt":
-                        df = df[pd.to_numeric(df[col], errors="coerce") < float(value)]
+                        df = df[_to_numeric_clean(df[col]) < float(value)]
 
             elif rtype == "normalize":
                 if col and col in df.columns:
-                    numeric = pd.to_numeric(df[col], errors="coerce")
-                    col_min = numeric.min()
-                    col_max = numeric.max()
-                    if col_max > col_min:
-                        df[col] = (numeric - col_min) / (col_max - col_min)
+                    if df[col].dtype == object:
+                        # Try mixed-format date parsing (pandas 2.0+)
+                        try:
+                            parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
+                        except Exception:
+                            parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
+                        # For any still-NaT values, retry with dayfirst=True
+                        mask = parsed.isna() & df[col].notna() & (df[col].astype(str) != "nan")
+                        if mask.any():
+                            retry = pd.to_datetime(df[col][mask], format="mixed", dayfirst=True, errors="coerce")
+                            parsed[mask] = retry
+                        if parsed.notna().sum() > len(df) * 0.3:
+                            df[col] = parsed.dt.strftime("%Y-%m-%d")
+                        else:
+                            df[col] = df[col].astype(str).str.strip().str.lower()
+                    else:
+                        numeric = pd.to_numeric(df[col], errors="coerce")
+                        col_min, col_max = numeric.min(), numeric.max()
+                        if col_max > col_min:
+                            df[col] = (numeric - col_min) / (col_max - col_min)
 
             elif rtype == "fill_nulls":
                 if col and col in df.columns:
-                    fill_value = params.get("value", "")
                     strategy = params.get("strategy", "value")
+                    fill_value = params.get("value", "Uncategorized")
                     if strategy == "mean":
-                        df[col] = df[col].fillna(pd.to_numeric(df[col], errors="coerce").mean())
+                        df[col] = df[col].fillna(_to_numeric_clean(df[col]).mean())
                     elif strategy == "median":
-                        df[col] = df[col].fillna(pd.to_numeric(df[col], errors="coerce").median())
+                        df[col] = df[col].fillna(_to_numeric_clean(df[col]).median())
                     elif strategy == "mode":
                         mode = df[col].mode()
                         df[col] = df[col].fillna(mode[0] if len(mode) > 0 else fill_value)
@@ -136,12 +166,10 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                         df[col] = df[col].fillna(fill_value)
 
             elif rtype == "trim_whitespace":
-                if col and col in df.columns:
-                    df[col] = df[col].astype(str).str.strip()
-                else:
-                    # apply to all string columns
-                    for c in df.select_dtypes(include="object").columns:
-                        df[c] = df[c].astype(str).str.strip()
+                targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
+                for c in targets:
+                    df[c] = df[c].astype(str).str.strip()
+                    df[c] = df[c].replace({"nan": None, "": None})
 
         except Exception as e:
             print(f"[executor] skipping rule {rtype} on {col}: {e}")
