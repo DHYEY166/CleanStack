@@ -3,7 +3,7 @@
 import { useState } from "react";
 import * as XLSX from "xlsx";
 
-type Format = "csv" | "tsv" | "json" | "jsonl" | "xlsx" | "xml";
+type Format = "csv" | "tsv" | "txt" | "json" | "jsonl" | "xlsx" | "xml";
 
 const FORMAT_LABELS: Record<string, string> = {
   csv:   "CSV",
@@ -13,7 +13,7 @@ const FORMAT_LABELS: Record<string, string> = {
   xlsx:  "Excel (XLSX)",
   xls:   "Excel (XLSX)",
   xml:   "XML",
-  txt:   "CSV",
+  txt:   "TXT",
 };
 
 const EXPORT_OPTIONS: { value: Format; label: string }[] = [
@@ -26,7 +26,6 @@ const EXPORT_OPTIONS: { value: Format; label: string }[] = [
 
 function nativeExt(fmt: string): Format {
   if (fmt === "xls") return "xlsx";
-  if (fmt === "txt") return "csv";
   return (fmt as Format) || "csv";
 }
 
@@ -169,6 +168,7 @@ export default function DownloadButton({
       const buf = await res.arrayBuffer();
       const mimes: Record<Format, string> = {
         csv:   "text/csv",
+        txt:   "text/plain",
         tsv:   "text/tab-separated-values",
         json:  "application/json",
         jsonl: "application/x-ndjson",

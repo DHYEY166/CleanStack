@@ -22,10 +22,15 @@ class _NpEncoder(json.JSONEncoder):
 
 def save_dataframe(df: pd.DataFrame, fmt: str) -> tuple[bytes, str, str]:
     """Return (file_bytes, content_type, extension) in native format."""
-    if fmt in ("csv", "txt"):
+    if fmt == "csv":
         buf = io.BytesIO()
         df.to_csv(buf, index=False)
         return buf.getvalue(), "text/csv", "csv"
+
+    elif fmt == "txt":
+        buf = io.BytesIO()
+        df.to_csv(buf, index=False)
+        return buf.getvalue(), "text/plain", "txt"
 
     elif fmt == "tsv":
         buf = io.BytesIO()

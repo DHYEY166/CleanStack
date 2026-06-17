@@ -7,7 +7,7 @@ const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
 const MIME: Record<string, { contentType: string; ext: string }> = {
   csv:  { contentType: "text/csv",                                                          ext: "csv"  },
-  txt:  { contentType: "text/csv",                                                          ext: "csv"  },
+  txt:  { contentType: "text/plain",                                                         ext: "txt"  },
   tsv:  { contentType: "text/tab-separated-values",                                         ext: "tsv"  },
   json: { contentType: "application/json",                                                  ext: "json" },
   jsonl:{ contentType: "application/x-ndjson",                                              ext: "jsonl"},
