@@ -43,7 +43,7 @@ const outputSchema = z.object({
 });
 
 const documentOutputSchema = z.object({
-  rules: z.array(documentRuleSchema),
+  rules: z.array(documentRuleSchema).max(7),
 });
 
 export async function POST(req: NextRequest) {
