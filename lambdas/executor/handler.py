@@ -436,7 +436,14 @@ def handler(event, context):
         processed_bucket = os.environ["S3_PROCESSED_BUCKET"]
 
         if run_mode == "document":
-            text = extract_text(file_bytes, fmt)
+            # Read pre-extracted text saved by profiler (avoids pdfplumber in executor)
+            text_key = "/".join(raw_s3_key.rsplit("/", 1)[:-1]) + "/extracted_text.txt"
+            try:
+                text_obj = s3.get_object(Bucket=raw_bucket, Key=text_key)
+                text = text_obj["Body"].read().decode("utf-8")
+            except Exception:
+                # Fallback: extract in-place
+                text = extract_text(file_bytes, fmt)
             text = apply_document_transforms(text, rules)
             out_bytes = text.encode("utf-8")
             processed_key = f"processed/{pipeline_id}/{run_id}/output.txt"
@@ -495,7 +502,10 @@ def handler(event, context):
         )
         conn.commit()
 
-        # Schema drift detection
+        # Schema drift detection — tabular only
+        if run_mode == "document":
+            return {"statusCode": 200, "run_id": run_id}
+
         new_hash, col_defs = schema_hash(df)
 
         cur.execute(

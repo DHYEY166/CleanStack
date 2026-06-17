@@ -62,9 +62,7 @@ def profile_document(text: str) -> dict:
     blank_penalty = min(blank_lines / max(len(lines), 1) * 100 * 0.3, 20)
     quality_score = max(0, round(100 - pii_penalty - html_penalty - blank_penalty))
 
-    return {
-        "quality_score": quality_score,
-        "total_rows": len(lines),
+    doc_stats = {
         "word_count": len(words),
         "char_count": len(text),
         "blank_line_count": blank_lines,
@@ -76,11 +74,16 @@ def profile_document(text: str) -> dict:
         },
         "html_tag_count": html_tags,
         "sample_text": text[:500],
+    }
+
+    return {
+        "quality_score": quality_score,
+        "total_rows": len(lines),
         "null_percentage": 0.0,
         "duplicate_percentage": 0.0,
         "type_mismatch_count": 0,
         "outlier_count": 0,
-        "column_stats": {},
+        "column_stats": doc_stats,
     }
 
 
@@ -237,6 +240,9 @@ def handler(event, context):
 
         if mode == "document":
             text = extract_text(file_bytes, fmt)
+            # Save extracted text to S3 so executor can skip re-extraction
+            text_key = "/".join(key.rsplit("/", 1)[:-1]) + "/extracted_text.txt"
+            s3.put_object(Bucket=bucket, Key=text_key, Body=text.encode("utf-8"), ContentType="text/plain")
             profile = profile_document(text)
         else:
             df = load_dataframe(file_bytes, fmt)
