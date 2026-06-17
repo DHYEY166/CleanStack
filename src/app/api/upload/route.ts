@@ -29,29 +29,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 400 });
   }
 
-  const run = await queryOne<PipelineRun>(
-    `INSERT INTO pipeline_runs (pipeline_id, status, file_format, raw_s3_key, started_at)
-     VALUES ($1, 'pending', $2, $3, now())
-     RETURNING *`,
-    [pipeline_id, ext, `${userId}/${pipeline_id}/PLACEHOLDER`]
-  );
+  try {
+    const run = await queryOne<PipelineRun>(
+      `INSERT INTO pipeline_runs (pipeline_id, status, file_format, raw_s3_key, started_at)
+       VALUES ($1, 'pending', $2, $3, now())
+       RETURNING *`,
+      [pipeline_id, ext, `${userId}/${pipeline_id}/PLACEHOLDER`]
+    );
 
-  if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
+    if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
 
-  const s3Key = `${userId}/${pipeline_id}/${run.id}/raw.${ext}`;
+    const s3Key = `${userId}/${pipeline_id}/${run.id}/raw.${ext}`;
 
-  await queryOne(
-    "UPDATE pipeline_runs SET raw_s3_key = $1 WHERE id = $2",
-    [s3Key, run.id]
-  );
+    await queryOne(
+      "UPDATE pipeline_runs SET raw_s3_key = $1 WHERE id = $2",
+      [s3Key, run.id]
+    );
 
-  const command = new PutObjectCommand({
-    Bucket: process.env.S3_RAW_BUCKET,
-    Key: s3Key,
-    ContentType: content_type,
-  });
+    const command = new PutObjectCommand({
+      Bucket: process.env.S3_RAW_BUCKET,
+      Key: s3Key,
+      ContentType: content_type,
+    });
 
-  const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
 
-  return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
+    return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
+  } catch (err) {
+    console.error("[POST /api/upload]", err);
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
 }

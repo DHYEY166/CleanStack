@@ -25,62 +25,67 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "run_id and rule_decisions required" }, { status: 400 });
   }
 
-  const run = await queryOne<{ id: string; pipeline_id: string; status: string }>(
-    `SELECT pr.id, pr.pipeline_id, pr.status
-     FROM pipeline_runs pr
-     JOIN pipelines p ON pr.pipeline_id = p.id
-     WHERE pr.id = $1 AND p.team_id = $2`,
-    [run_id, userId]
-  );
+  try {
+    const run = await queryOne<{ id: string; pipeline_id: string; status: string }>(
+      `SELECT pr.id, pr.pipeline_id, pr.status
+       FROM pipeline_runs pr
+       JOIN pipelines p ON pr.pipeline_id = p.id
+       WHERE pr.id = $1 AND p.team_id = $2`,
+      [run_id, userId]
+    );
 
-  if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
-  if (run.status !== "awaiting_approval") {
-    return NextResponse.json({ error: "Run is not awaiting approval" }, { status: 409 });
-  }
+    if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+    if (run.status !== "awaiting_approval") {
+      return NextResponse.json({ error: "Run is not awaiting approval" }, { status: 409 });
+    }
 
-  await Promise.all(
-    rule_decisions.map((d) => {
-      const params = d.modifications
-        ? JSON.stringify(d.modifications)
-        : null;
-      return query(
-        `UPDATE transform_rules
-         SET status = $2${params ? ", parameters = $3" : ""}
-         WHERE id = $1`,
-        params ? [d.rule_id, d.action, params] : [d.rule_id, d.action]
-      );
-    })
-  );
-
-  const ruleChanges = Object.fromEntries(
-    rule_decisions.map((d) => [d.rule_id, { action: d.action, modifications: d.modifications }])
-  );
-
-  await queryOne(
-    `INSERT INTO approval_reviews (run_id, reviewer_id, action, rule_changes)
-     VALUES ($1, $2, 'approved', $3)`,
-    [run_id, userId, JSON.stringify(ruleChanges)]
-  );
-
-  const approvedCount = rule_decisions.filter((d) => d.action === "approved").length;
-
-  if (approvedCount > 0 && process.env.SQS_QUEUE_URL) {
-    await sqs.send(
-      new SendMessageCommand({
-        QueueUrl: process.env.SQS_QUEUE_URL,
-        MessageBody: JSON.stringify({ run_id }),
+    await Promise.all(
+      rule_decisions.map((d) => {
+        const params = d.modifications
+          ? JSON.stringify(d.modifications)
+          : null;
+        return query(
+          `UPDATE transform_rules
+           SET status = $2${params ? ", parameters = $3" : ""}
+           WHERE id = $1`,
+          params ? [d.rule_id, d.action, params] : [d.rule_id, d.action]
+        );
       })
     );
-    await queryOne(
-      "UPDATE pipeline_runs SET status = 'queued' WHERE id = $1",
-      [run_id]
-    );
-  } else {
-    await queryOne(
-      "UPDATE pipeline_runs SET status = 'completed' WHERE id = $1",
-      [run_id]
-    );
-  }
 
-  return NextResponse.json({ ok: true });
+    const ruleChanges = Object.fromEntries(
+      rule_decisions.map((d) => [d.rule_id, { action: d.action, modifications: d.modifications }])
+    );
+
+    await queryOne(
+      `INSERT INTO approval_reviews (run_id, reviewer_id, action, rule_changes)
+       VALUES ($1, $2, 'approved', $3)`,
+      [run_id, userId, JSON.stringify(ruleChanges)]
+    );
+
+    const approvedCount = rule_decisions.filter((d) => d.action === "approved").length;
+
+    if (approvedCount > 0 && process.env.SQS_QUEUE_URL) {
+      await sqs.send(
+        new SendMessageCommand({
+          QueueUrl: process.env.SQS_QUEUE_URL,
+          MessageBody: JSON.stringify({ run_id }),
+        })
+      );
+      await queryOne(
+        "UPDATE pipeline_runs SET status = 'queued' WHERE id = $1",
+        [run_id]
+      );
+    } else {
+      await queryOne(
+        "UPDATE pipeline_runs SET status = 'completed' WHERE id = $1",
+        [run_id]
+      );
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("[POST /api/approve-rules]", err);
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
 }
