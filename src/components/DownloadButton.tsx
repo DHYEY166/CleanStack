@@ -149,7 +149,8 @@ export default function DownloadButton({
   inputFormat: string;
   mode?: string;
 }) {
-  const native = nativeExt(inputFormat);
+  const isDocument = mode === "document";
+  const native = isDocument ? "txt" : nativeExt(inputFormat);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportFmt, setExportFmt] = useState<Format>("csv");
@@ -205,8 +206,7 @@ export default function DownloadButton({
     }
   }
 
-  const nativeLabel = FORMAT_LABELS[inputFormat] ?? inputFormat.toUpperCase();
-  const isDocument = mode === "document";
+  const nativeLabel = isDocument ? "TXT" : (FORMAT_LABELS[inputFormat] ?? inputFormat.toUpperCase());
   const exportOptions = EXPORT_OPTIONS.filter((o) => o.value !== native);
 
   return (
