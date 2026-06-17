@@ -11,14 +11,13 @@ def get_db_conn():
     secret = json.loads(
         secrets.get_secret_value(SecretId=os.environ["DB_SECRET_ARN"])["SecretString"]
     )
-    return psycopg2.connect(
-        host=secret["host"],
-        port=secret.get("port", 5432),
-        dbname=secret.get("dbname", "cleanstack"),
-        user=secret["username"],
-        password=secret["password"],
-        sslmode="require",
-    )
+    host = secret["host"]
+    port = secret.get("port", 5432)
+    user = secret["username"]
+    dbname = secret.get("dbname", "cleanstack")
+    rds = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    token = rds.generate_db_auth_token(DBHostname=host, Port=port, DBUsername=user)
+    return psycopg2.connect(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
 
 
 def compute_diff(old: dict, new: dict) -> dict:

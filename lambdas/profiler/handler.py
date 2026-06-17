@@ -12,8 +12,13 @@ secrets = boto3.client("secretsmanager")
 
 
 def get_db_conn():
+    from urllib.parse import urlparse
     url = os.environ["DATABASE_URL"]
-    return psycopg2.connect(url, sslmode="require")
+    p = urlparse(url)
+    host, port, user, dbname = p.hostname, p.port or 5432, p.username, p.path.lstrip("/")
+    rds = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    token = rds.generate_db_auth_token(DBHostname=host, Port=port, DBUsername=user)
+    return psycopg2.connect(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
 
 
 def detect_format(key: str, content_type: str) -> str:
@@ -130,6 +135,13 @@ def handler(event, context):
         df = load_dataframe(file_bytes, fmt)
         profile = compute_quality_score(df)
 
+        class _NpEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, (np.integer,)): return int(obj)
+                if isinstance(obj, (np.floating,)): return float(obj)
+                if isinstance(obj, np.ndarray): return obj.tolist()
+                return super().default(obj)
+
         cur.execute(
             """INSERT INTO data_profiles
                (run_id, stage, quality_score, total_rows, null_percentage,
@@ -137,13 +149,13 @@ def handler(event, context):
                VALUES (%s, 'raw', %s, %s, %s, %s, %s, %s, %s)""",
             (
                 run_id,
-                profile["quality_score"],
-                profile["total_rows"],
-                profile["null_percentage"],
-                profile["duplicate_percentage"],
-                profile["type_mismatch_count"],
-                profile["outlier_count"],
-                json.dumps(profile["column_stats"]),
+                float(profile["quality_score"]),
+                int(profile["total_rows"]),
+                float(profile["null_percentage"]),
+                float(profile["duplicate_percentage"]),
+                int(profile["type_mismatch_count"]),
+                int(profile["outlier_count"]),
+                json.dumps(profile["column_stats"], cls=_NpEncoder),
             ),
         )
 
@@ -163,6 +175,7 @@ def handler(event, context):
         )
 
     except Exception as e:
+        conn.rollback()
         cur.execute(
             "UPDATE pipeline_runs SET status = 'failed', error_message = %s WHERE id = %s",
             (str(e), run_id),
