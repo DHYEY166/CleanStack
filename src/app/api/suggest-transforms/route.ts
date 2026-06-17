@@ -64,6 +64,15 @@ export async function POST(req: NextRequest) {
   );
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
+  // Idempotency guard: S3 triggers Lambda at-least-once; skip if rules already exist
+  const existingRules = await queryOne<{ count: string }>(
+    "SELECT COUNT(*) AS count FROM transform_rules WHERE run_id = $1",
+    [run_id]
+  );
+  if (existingRules && parseInt(existingRules.count) > 0) {
+    return NextResponse.json({ ok: true, skipped: true, existing: parseInt(existingRules.count) });
+  }
+
   // Short-circuit: if pipeline was created from a template, use its rules directly
   if (run.template_id) {
     const template = await queryOne<PipelineTemplate>(
