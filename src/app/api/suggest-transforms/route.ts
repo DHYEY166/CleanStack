@@ -135,44 +135,32 @@ ${docProfile?.sample_text ?? "(no sample)"}
 
 ---
 
-Suggest 3-8 document cleaning rules. Only suggest rules for issues that are actually present.
+Suggest 3-6 document cleaning rules. Only suggest rules for issues actually present. Each rule_type must appear AT MOST ONCE in your output — no duplicates.
 
-Available rule types and their parameters:
+Available rule types (each can only be used once):
 
-strip_pii:
-  column_name: null
-  parameters: {}
-  Use when: emails > 0 OR phones > 0 OR ssns > 0 OR credit_cards > 0
+strip_pii — redacts ALL PII types (emails, phones, SSNs, credit cards) in one pass
+  Use when: any PII count > 0. Covers all PII in one rule — do NOT also add redact_pattern for the same PII.
 
-normalize_whitespace:
-  column_name: null
-  parameters: {}
-  Use when: sample text shows multiple consecutive spaces or inconsistent spacing
+normalize_whitespace — normalises spaces, tabs, and excessive newlines
+  Use when: sample text shows inconsistent spacing
 
-strip_html:
-  column_name: null
-  parameters: {}
+strip_html — removes HTML tags and decodes entities
   Use when: html_tag_count > 0
 
-fix_encoding:
-  column_name: null
-  parameters: {}
-  Use when: sample text contains mojibake characters (â€™, Ã©, etc.) or garbled unicode
+fix_encoding — fixes mojibake / garbled unicode characters
+  Use when: sample text contains characters like â€™, Ã©, etc.
 
-remove_blank_lines:
-  column_name: null
-  parameters: {}
-  Use when: blank_line_count > total_lines * 0.15 (more than 15% blank)
+remove_blank_lines — removes empty lines
+  Use when: blank_line_count > total_lines * 0.15
 
-remove_headers_footers:
-  column_name: null
-  parameters: {}
-  Use when: document appears to be a PDF with repeated page headers/footers
+remove_headers_footers — removes repeated page headers/footers
+  Use when: document appears to be a PDF with repeated page text
 
-redact_pattern:
-  column_name: null
-  parameters: {"pattern": "<regex>", "replacement": "<text>"}
-  Use when: sample text shows domain-specific sensitive patterns (e.g. account numbers, employee IDs)
+redact_pattern — redacts ONE specific domain pattern not covered by strip_pii (e.g. contract numbers, employee IDs)
+  Use when: sample shows a non-PII sensitive pattern. Only include if strip_pii does NOT already cover it.
+
+IMPORTANT: If you suggest strip_pii, do NOT add any redact_pattern for emails/phones/SSNs/credit cards — those are already handled. Use redact_pattern only for patterns like contract IDs or account numbers.
 
 For each rule write ai_reasoning as one precise sentence referencing what was observed in the profile or sample.`;
 
@@ -197,8 +185,16 @@ For each rule write ai_reasoning as one precise sentence referencing what was ob
       return NextResponse.json({ error: "No rules generated" }, { status: 500 });
     }
 
+    // Deduplicate by rule_type — keep first occurrence of each
+    const seen = new Set<string>();
+    const uniqueRules = docOutput.rules.filter((r) => {
+      if (seen.has(r.rule_type)) return false;
+      seen.add(r.rule_type);
+      return true;
+    });
+
     await Promise.all(
-      docOutput.rules.map((rule, idx) =>
+      uniqueRules.map((rule, idx) =>
         queryOne(
           `INSERT INTO transform_rules
              (pipeline_id, run_id, rule_type, column_name, parameters, ai_reasoning, status, order_index)
