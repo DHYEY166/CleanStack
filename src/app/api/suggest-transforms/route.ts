@@ -288,7 +288,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   let output: { rules: Array<{ rule_type: string; column_name: string | null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
   try {
     const result = await generateText({
-      model: bedrock("amazon.nova-pro-v1:0"),
+      model: bedrock("us.anthropic.claude-sonnet-4-6"),
       output: Output.object({ schema: outputSchema }),
       prompt,
     });
