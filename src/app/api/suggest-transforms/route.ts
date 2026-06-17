@@ -285,11 +285,22 @@ rename:
 
 For each rule, write ai_reasoning as one precise sentence that references the specific values observed (e.g. "Sample values show '$24.99', '$199.99' — currency symbols prevent numeric aggregation; stripping and casting to float enables revenue calculations.").`;
 
-  const { output } = await generateText({
-    model: bedrock("us.anthropic.claude-sonnet-4-6"),
-    output: Output.object({ schema: outputSchema }),
-    prompt,
-  });
+  let output: { rules: Array<{ rule_type: string; column_name: string | null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
+  try {
+    const result = await generateText({
+      model: bedrock("amazon.nova-pro-v1:0"),
+      output: Output.object({ schema: outputSchema }),
+      prompt,
+    });
+    output = result.output;
+  } catch (aiErr) {
+    console.error("[suggest-transforms] Bedrock error:", aiErr);
+    await queryOne(
+      "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      [run_id, `AI error: ${String(aiErr)}`]
+    );
+    return NextResponse.json({ error: String(aiErr) }, { status: 500 });
+  }
 
   if (!output?.rules?.length) {
     await queryOne(
