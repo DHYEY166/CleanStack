@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText, Output } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+
+export const maxDuration = 60;
 import { z } from "zod";
 import { queryOne, query } from "@/lib/db";
 import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@/lib/types";
