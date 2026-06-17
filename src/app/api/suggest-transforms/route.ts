@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText, Output } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { bedrock } from "@ai-sdk/amazon-bedrock";
 
 export const maxDuration = 60;
 import { z } from "zod";
@@ -286,7 +286,7 @@ rename:
 For each rule, write ai_reasoning as one precise sentence that references the specific values observed (e.g. "Sample values show '$24.99', '$199.99' — currency symbols prevent numeric aggregation; stripping and casting to float enables revenue calculations.").`;
 
   const { output } = await generateText({
-    model: anthropic("claude-sonnet-4-6"),
+    model: bedrock("us.anthropic.claude-sonnet-4-6"),
     output: Output.object({ schema: outputSchema }),
     prompt,
   });
