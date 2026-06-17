@@ -12,6 +12,56 @@ sns = boto3.client("sns")
 secrets = boto3.client("secretsmanager")
 
 
+class _NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer): return int(obj)
+        if isinstance(obj, np.floating): return None if np.isnan(obj) else float(obj)
+        if isinstance(obj, np.ndarray): return obj.tolist()
+        return super().default(obj)
+
+
+def save_dataframe(df: pd.DataFrame, fmt: str) -> tuple[bytes, str, str]:
+    """Return (file_bytes, content_type, extension) in native format."""
+    if fmt in ("csv", "txt"):
+        buf = io.BytesIO()
+        df.to_csv(buf, index=False)
+        return buf.getvalue(), "text/csv", "csv"
+
+    elif fmt == "tsv":
+        buf = io.BytesIO()
+        df.to_csv(buf, sep="\t", index=False)
+        return buf.getvalue(), "text/tab-separated-values", "tsv"
+
+    elif fmt == "json":
+        json_str = df.to_json(orient="records", indent=2, force_ascii=False)
+        return (json_str or "[]").encode("utf-8"), "application/json", "json"
+
+    elif fmt == "jsonl":
+        json_str = df.to_json(orient="records", lines=True, force_ascii=False)
+        return (json_str or "").encode("utf-8"), "application/x-ndjson", "jsonl"
+
+    elif fmt in ("xlsx", "xls"):
+        buf = io.BytesIO()
+        df.to_excel(buf, index=False, engine="openpyxl")
+        return buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+
+    elif fmt == "xml":
+        from lxml import etree
+        root = etree.Element("records")
+        for _, row in df.iterrows():
+            record = etree.SubElement(root, "record")
+            for col, val in row.items():
+                child = etree.SubElement(record, str(col).replace(" ", "_"))
+                child.text = "" if (val is None or (isinstance(val, float) and np.isnan(val))) else str(val)
+        xml_bytes = etree.tostring(root, pretty_print=True, xml_declaration=True, encoding="UTF-8")
+        return xml_bytes, "application/xml", "xml"
+
+    else:
+        buf = io.BytesIO()
+        df.to_csv(buf, index=False)
+        return buf.getvalue(), "text/csv", "csv"
+
+
 def get_db_conn():
     secret = json.loads(
         secrets.get_secret_value(SecretId=os.environ["DB_SECRET_ARN"])["SecretString"]
@@ -299,28 +349,19 @@ def handler(event, context):
         df = load_raw_dataframe(file_bytes, fmt)
         df = apply_transforms(df, rules)
 
-        # Write processed CSV to S3
+        # Write processed file in native format to S3
         processed_bucket = os.environ["S3_PROCESSED_BUCKET"]
-        processed_key = f"processed/{pipeline_id}/{run_id}/output.csv"
-        csv_buf = io.BytesIO()
-        df.to_csv(csv_buf, index=False)
-        csv_buf.seek(0)
+        file_bytes, content_type, ext = save_dataframe(df, fmt)
+        processed_key = f"processed/{pipeline_id}/{run_id}/output.{ext}"
         s3.put_object(
             Bucket=processed_bucket,
             Key=processed_key,
-            Body=csv_buf.getvalue(),
-            ContentType="text/csv",
+            Body=file_bytes,
+            ContentType=content_type,
         )
 
         # Compute post-transform profile
         profile = compute_quality_profile(df)
-
-        class _NpEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, (np.integer,)): return int(obj)
-                if isinstance(obj, (np.floating,)): return float(obj)
-                if isinstance(obj, np.ndarray): return obj.tolist()
-                return super().default(obj)
 
         cur.execute(
             """INSERT INTO data_profiles
