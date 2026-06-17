@@ -64,13 +64,14 @@ export async function POST(req: NextRequest) {
   );
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
-  // Idempotency guard: S3 triggers Lambda at-least-once; skip if rules already exist
-  const existingRules = await queryOne<{ count: string }>(
-    "SELECT COUNT(*) AS count FROM transform_rules WHERE run_id = $1",
+  // Atomic mutex: only one concurrent caller can claim this run.
+  // UPDATE returns a row only if status is still 'awaiting_ai' — first writer wins, rest bail.
+  const claimed = await queryOne<{ id: string }>(
+    "UPDATE pipeline_runs SET status = 'queued' WHERE id = $1 AND status = 'awaiting_ai' RETURNING id",
     [run_id]
   );
-  if (existingRules && parseInt(existingRules.count) > 0) {
-    return NextResponse.json({ ok: true, skipped: true, existing: parseInt(existingRules.count) });
+  if (!claimed) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "already claimed" });
   }
 
   // Short-circuit: if pipeline was created from a template, use its rules directly
