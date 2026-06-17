@@ -24,6 +24,13 @@ export default function ReviewClient({ pipelineId, run, rules }: ReviewClientPro
     setDecisions((prev) => new Map(prev).set(d.rule_id, d));
   }, []);
 
+  function approveAll() {
+    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "approved" as const }])));
+  }
+  function rejectAll() {
+    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "rejected" as const }])));
+  }
+
   const approved = [...decisions.values()].filter((d) => d.action === "approved").length;
   const rejected = [...decisions.values()].filter((d) => d.action === "rejected").length;
 
@@ -82,6 +89,23 @@ export default function ReviewClient({ pipelineId, run, rules }: ReviewClientPro
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm">
             {error}
+          </div>
+        )}
+
+        {rules.length > 1 && (
+          <div className="flex gap-2">
+            <button
+              onClick={approveAll}
+              className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              ✓ Approve All
+            </button>
+            <button
+              onClick={rejectAll}
+              className="px-4 py-2 bg-red-900 hover:bg-red-800 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              ✗ Reject All
+            </button>
           </div>
         )}
 
