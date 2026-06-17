@@ -9,6 +9,7 @@ import ColumnStatsTable from "@/components/ColumnStatsTable";
 import QualityTrendChart from "@/components/QualityTrendChart";
 import SchemaDiffViewer from "@/components/SchemaDiffViewer";
 import DownloadButton from "@/components/DownloadButton";
+import RunStatusPoller from "@/components/RunStatusPoller";
 
 export default async function RunDetailPage({
   params,
@@ -108,6 +109,7 @@ export default async function RunDetailPage({
   return (
     <div className="min-h-screen bg-gray-950">
       <Nav />
+      <RunStatusPoller runId={rid} currentStatus={run.status} />
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         {/* Breadcrumb */}
         <div className="text-sm text-gray-500">
