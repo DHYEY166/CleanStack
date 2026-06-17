@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import Link from "next/link";
 import { query } from "@/lib/db";
 import type { Pipeline, PipelineRun } from "@/lib/types";
+import DeletePipelineButton from "@/components/DeletePipelineButton";
 
 async function getPipelines(teamId: string): Promise<Pipeline[]> {
   try {
@@ -96,23 +97,26 @@ export default async function DashboardPage() {
         ) : (
           <div className="space-y-3">
             {pipelines.map((pipeline) => (
-              <Link
+              <div
                 key={pipeline.id}
-                href={`/pipelines/${pipeline.id}`}
-                className="block bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-gray-600 transition-colors"
+                className="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-gray-600 transition-colors flex items-center justify-between gap-4"
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-white">{pipeline.name}</div>
-                    {pipeline.description && (
-                      <div className="text-sm text-gray-400 mt-0.5">{pipeline.description}</div>
-                    )}
-                  </div>
+                <Link href={`/pipelines/${pipeline.id}`} className="flex-1 min-w-0">
+                  <div className="font-medium text-white">{pipeline.name}</div>
+                  {pipeline.description && (
+                    <div className="text-sm text-gray-400 mt-0.5 truncate">{pipeline.description}</div>
+                  )}
+                </Link>
+                <div className="flex items-center gap-3 flex-shrink-0">
                   <div className="text-xs text-gray-500">
                     {new Date(pipeline.created_at).toLocaleDateString()}
                   </div>
+                  <DeletePipelineButton
+                    pipelineId={pipeline.id}
+                    pipelineName={pipeline.name}
+                  />
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}
