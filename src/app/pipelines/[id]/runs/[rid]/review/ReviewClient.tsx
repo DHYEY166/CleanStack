@@ -25,10 +25,10 @@ export default function ReviewClient({ pipelineId, run, rules }: ReviewClientPro
   }, []);
 
   function approveAll() {
-    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "approved" as const }])));
+    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "approved" as const, modifications: null }])));
   }
   function rejectAll() {
-    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "rejected" as const }])));
+    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "rejected" as const, modifications: null }])));
   }
 
   const approved = [...decisions.values()].filter((d) => d.action === "approved").length;
