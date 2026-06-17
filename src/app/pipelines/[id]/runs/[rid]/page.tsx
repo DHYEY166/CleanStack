@@ -10,6 +10,7 @@ import QualityTrendChart from "@/components/QualityTrendChart";
 import SchemaDiffViewer from "@/components/SchemaDiffViewer";
 import DownloadButton from "@/components/DownloadButton";
 import RunStatusPoller from "@/components/RunStatusPoller";
+import DocumentProfile from "@/components/DocumentProfile";
 
 export default async function RunDetailPage({
   params,
@@ -19,7 +20,7 @@ export default async function RunDetailPage({
   const { userId } = await auth();
   const { id, rid } = await params;
 
-  const run = await queryOne<PipelineRun & { pipeline_name: string }>(
+  const run = await queryOne<PipelineRun & { pipeline_name: string; mode: string }>(
     `SELECT pr.*, p.name AS pipeline_name
      FROM pipeline_runs pr
      JOIN pipelines p ON pr.pipeline_id = p.id
@@ -136,13 +137,13 @@ export default async function RunDetailPage({
           )}
           {run.row_count_raw != null && (
             <div className="text-right">
-              <div className="text-sm text-gray-400 mb-1">Rows (raw)</div>
+              <div className="text-sm text-gray-400 mb-1">{run.mode === "document" ? "Lines (raw)" : "Rows (raw)"}</div>
               <div className="text-white font-medium">{run.row_count_raw.toLocaleString()}</div>
             </div>
           )}
           {run.row_count_processed != null && (
             <div className="text-right">
-              <div className="text-sm text-gray-400 mb-1">Rows (processed)</div>
+              <div className="text-sm text-gray-400 mb-1">{run.mode === "document" ? "Lines (processed)" : "Rows (processed)"}</div>
               <div className="text-white font-medium">{run.row_count_processed.toLocaleString()}</div>
             </div>
           )}
@@ -151,6 +152,7 @@ export default async function RunDetailPage({
               <DownloadButton
                 runId={rid}
                 inputFormat={run.file_format ?? "csv"}
+                mode={run.mode ?? "tabular"}
               />
             </div>
           )}
@@ -181,12 +183,23 @@ export default async function RunDetailPage({
           </div>
         )}
 
-        {/* Column stats — raw profile */}
-        {rawProfile?.column_stats && Object.keys(rawProfile.column_stats).length > 0 && (
+        {/* Profile section — document vs tabular */}
+        {rawProfile && run.mode === "document" ? (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Column Profile (Raw)</h2>
-            <ColumnStatsTable columnStats={rawProfile.column_stats} />
+            <h2 className="text-lg font-semibold text-white mb-4">Document Profile</h2>
+            <DocumentProfile
+              qualityScore={rawProfile.quality_score ?? 0}
+              totalLines={rawProfile.total_rows ?? 0}
+              columnStats={rawProfile.column_stats ?? {}}
+            />
           </div>
+        ) : (
+          rawProfile?.column_stats && Object.keys(rawProfile.column_stats).length > 0 && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+              <h2 className="text-lg font-semibold text-white mb-4">Column Profile (Raw)</h2>
+              <ColumnStatsTable columnStats={rawProfile.column_stats} />
+            </div>
+          )
         )}
 
         {/* Transform rules */}

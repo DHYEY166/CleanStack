@@ -7,8 +7,8 @@ import PipelineChat from "@/components/PipelineChat";
 
 const ACCEPTED_TYPES = [
   ".csv", ".tsv", ".txt", ".json", ".jsonl",
-  ".xlsx", ".xls", ".pdf", ".jpg", ".jpeg", ".png",
-  ".xml", ".parquet",
+  ".xlsx", ".xls", ".xml", ".parquet",
+  ".pdf", ".docx",
 ];
 
 const FORMAT_LABELS: Record<string, string> = {

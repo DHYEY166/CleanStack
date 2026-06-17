@@ -14,6 +14,9 @@ const MIME: Record<string, { contentType: string; ext: string }> = {
   xlsx: { contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" },
   xls:  { contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" },
   xml:  { contentType: "application/xml",                                                   ext: "xml"  },
+  // document mode — output is always txt regardless of input format
+  pdf:  { contentType: "text/plain",                                                         ext: "txt"  },
+  docx: { contentType: "text/plain",                                                         ext: "txt"  },
 };
 
 export async function GET(

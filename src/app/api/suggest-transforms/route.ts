@@ -23,8 +23,27 @@ const ruleSchema = z.object({
   ai_reasoning: z.string(),
 });
 
+const documentRuleSchema = z.object({
+  rule_type: z.enum([
+    "strip_pii",
+    "normalize_whitespace",
+    "strip_html",
+    "fix_encoding",
+    "remove_blank_lines",
+    "remove_headers_footers",
+    "redact_pattern",
+  ]),
+  column_name: z.null(),
+  parameters: z.record(z.string(), z.unknown()),
+  ai_reasoning: z.string(),
+});
+
 const outputSchema = z.object({
   rules: z.array(ruleSchema),
+});
+
+const documentOutputSchema = z.object({
+  rules: z.array(documentRuleSchema),
 });
 
 export async function POST(req: NextRequest) {
@@ -36,7 +55,7 @@ export async function POST(req: NextRequest) {
   const { run_id } = await req.json();
   if (!run_id) return NextResponse.json({ error: "run_id required" }, { status: 400 });
 
-  const run = await queryOne<PipelineRun & { template_id: string | null }>(
+  const run = await queryOne<PipelineRun & { template_id: string | null; mode: string }>(
     `SELECT pr.*, p.template_id
      FROM pipeline_runs pr
      JOIN pipelines p ON pr.pipeline_id = p.id
@@ -90,6 +109,107 @@ export async function POST(req: NextRequest) {
   );
   if (!profile) {
     return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+  }
+
+  // Document mode — separate prompt + schema
+  if (run.mode === "document") {
+    const docProfile = profile.column_stats as unknown as {
+      word_count?: number; char_count?: number; blank_line_count?: number;
+      pii_detected?: { emails: number; phones: number; ssns: number; credit_cards: number };
+      html_tag_count?: number; sample_text?: string;
+    } | null;
+
+    const docPrompt = `You are an expert document quality engineer. Analyze this document profile and suggest cleaning rules to improve quality and compliance.
+
+DOCUMENT PROFILE:
+- Quality score: ${profile.quality_score}/100
+- Total lines: ${profile.total_rows}
+- Word count: ${docProfile?.word_count ?? "unknown"}
+- Character count: ${docProfile?.char_count ?? "unknown"}
+- Blank lines: ${docProfile?.blank_line_count ?? 0}
+- PII detected: ${docProfile?.pii_detected?.emails ?? 0} emails, ${docProfile?.pii_detected?.phones ?? 0} phones, ${docProfile?.pii_detected?.ssns ?? 0} SSNs, ${docProfile?.pii_detected?.credit_cards ?? 0} credit cards
+- HTML tags found: ${docProfile?.html_tag_count ?? 0}
+
+SAMPLE TEXT (first 500 chars):
+${docProfile?.sample_text ?? "(no sample)"}
+
+---
+
+Suggest 3-8 document cleaning rules. Only suggest rules for issues that are actually present.
+
+Available rule types and their parameters:
+
+strip_pii:
+  column_name: null
+  parameters: {}
+  Use when: emails > 0 OR phones > 0 OR ssns > 0 OR credit_cards > 0
+
+normalize_whitespace:
+  column_name: null
+  parameters: {}
+  Use when: sample text shows multiple consecutive spaces or inconsistent spacing
+
+strip_html:
+  column_name: null
+  parameters: {}
+  Use when: html_tag_count > 0
+
+fix_encoding:
+  column_name: null
+  parameters: {}
+  Use when: sample text contains mojibake characters (â€™, Ã©, etc.) or garbled unicode
+
+remove_blank_lines:
+  column_name: null
+  parameters: {}
+  Use when: blank_line_count > total_lines * 0.15 (more than 15% blank)
+
+remove_headers_footers:
+  column_name: null
+  parameters: {}
+  Use when: document appears to be a PDF with repeated page headers/footers
+
+redact_pattern:
+  column_name: null
+  parameters: {"pattern": "<regex>", "replacement": "<text>"}
+  Use when: sample text shows domain-specific sensitive patterns (e.g. account numbers, employee IDs)
+
+For each rule write ai_reasoning as one precise sentence referencing what was observed in the profile or sample.`;
+
+    let docOutput: { rules: Array<{ rule_type: string; column_name: null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
+    try {
+      const result = await generateText({
+        model: bedrock("us.anthropic.claude-sonnet-4-6"),
+        output: Output.object({ schema: documentOutputSchema }),
+        prompt: docPrompt,
+      });
+      docOutput = result.output;
+    } catch (aiErr) {
+      console.error("[suggest-transforms] Bedrock document error:", aiErr);
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        [run_id, `AI error: ${String(aiErr)}`]);
+      return NextResponse.json({ error: String(aiErr) }, { status: 500 });
+    }
+
+    if (!docOutput?.rules?.length) {
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        [run_id, "AI returned no document rules"]);
+      return NextResponse.json({ error: "No rules generated" }, { status: 500 });
+    }
+
+    await Promise.all(
+      docOutput.rules.map((rule, idx) =>
+        queryOne(
+          `INSERT INTO transform_rules
+             (pipeline_id, run_id, rule_type, column_name, parameters, ai_reasoning, status, order_index)
+           VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7)`,
+          [run.pipeline_id, run_id, rule.rule_type, null,
+           JSON.stringify(rule.parameters), rule.ai_reasoning, idx]
+        )
+      )
+    );
+    await queryOne("UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1", [run_id]);
+    return NextResponse.json({ ok: true, rules_count: docOutput.rules.length, mode: "document" });
   }
 
   const columnStats = profile.column_stats ?? {};

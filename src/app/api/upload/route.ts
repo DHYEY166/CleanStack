@@ -9,8 +9,8 @@ const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
 const ALLOWED_EXTENSIONS = new Set([
   "csv", "tsv", "txt", "json", "jsonl",
-  "xlsx", "xls", "pdf", "jpg", "jpeg", "png",
-  "xml", "parquet",
+  "xlsx", "xls", "xml", "parquet",
+  "pdf", "docx",
 ]);
 
 export async function POST(req: NextRequest) {

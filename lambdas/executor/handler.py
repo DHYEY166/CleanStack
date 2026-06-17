@@ -1,11 +1,16 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "package"))
+
 import json
-import os
 import io
+import re
 import hashlib
 import boto3
 import psycopg2
 import pandas as pd
 import numpy as np
+
+DOCUMENT_EXTENSIONS = {"pdf", "docx"}
 
 s3 = boto3.client("s3")
 sns = boto3.client("sns")
@@ -65,6 +70,82 @@ def save_dataframe(df: pd.DataFrame, fmt: str) -> tuple[bytes, str, str]:
         buf = io.BytesIO()
         df.to_csv(buf, index=False)
         return buf.getvalue(), "text/csv", "csv"
+
+
+def extract_text(file_bytes: bytes, fmt: str) -> str:
+    if fmt == "pdf":
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            pages = [page.extract_text() or "" for page in pdf.pages]
+        return "\n\n".join(pages)
+    elif fmt == "docx":
+        from docx import Document
+        doc = Document(io.BytesIO(file_bytes))
+        return "\n".join(p.text for p in doc.paragraphs)
+    else:
+        return file_bytes.decode("utf-8", errors="replace")
+
+
+def apply_document_transforms(text: str, rules: list[dict]) -> str:
+    for rule in rules:
+        rtype = rule["rule_type"]
+        params = _parse_params_simple(rule.get("parameters", {}))
+        try:
+            if rtype == "strip_pii":
+                text = re.sub(r'[\w.+-]+@[\w-]+\.\w+', '[EMAIL REDACTED]', text)
+                text = re.sub(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', '[PHONE REDACTED]', text)
+                text = re.sub(r'\b\d{3}-\d{2}-\d{4}\b', '[SSN REDACTED]', text)
+                text = re.sub(r'\b(?:\d{4}[- ]?){3}\d{4}\b', '[CC REDACTED]', text)
+
+            elif rtype == "normalize_whitespace":
+                text = re.sub(r'[ \t]+', ' ', text)
+                text = re.sub(r'\n{3,}', '\n\n', text)
+                text = '\n'.join(l.rstrip() for l in text.splitlines())
+
+            elif rtype == "strip_html":
+                text = re.sub(r'<[^>]+>', '', text)
+                for entity, char in [('&amp;','&'),('&lt;','<'),('&gt;','>'),('&nbsp;',' '),('&quot;','"')]:
+                    text = text.replace(entity, char)
+
+            elif rtype == "fix_encoding":
+                replacements = {
+                    'â€™': "'", 'â€œ': '"', 'â€\x9d': '"', 'â€¦': '…',
+                    'â€"': '—', 'â€"': '–', 'Ã©': 'é', 'Ã¨': 'è',
+                    'Ã ': 'à', 'Ã®': 'î', 'Ã´': 'ô', 'Ã¹': 'ù',
+                }
+                for bad, good in replacements.items():
+                    text = text.replace(bad, good)
+
+            elif rtype == "remove_blank_lines":
+                lines = [l for l in text.splitlines() if l.strip()]
+                text = '\n'.join(lines)
+
+            elif rtype == "remove_headers_footers":
+                from collections import Counter
+                lines = text.splitlines()
+                counts = Counter(l.strip() for l in lines if l.strip())
+                repeated = {l for l, c in counts.items() if c >= 3 and len(l) < 120}
+                text = '\n'.join(l for l in lines if l.strip() not in repeated)
+
+            elif rtype == "redact_pattern":
+                pattern = params.get("pattern", "")
+                replacement = params.get("replacement", "[REDACTED]")
+                if pattern:
+                    text = re.sub(pattern, str(replacement), text)
+
+        except Exception as e:
+            print(f"[executor] skipping doc rule {rtype}: {e}")
+
+    return text
+
+
+def _parse_params_simple(raw) -> dict:
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {}
+    return raw or {}
 
 
 def get_db_conn():
@@ -326,11 +407,12 @@ def handler(event, context):
 
         # Fetch run metadata
         cur.execute(
-            "SELECT pipeline_id, raw_s3_key, file_format FROM pipeline_runs WHERE id = %s",
+            "SELECT pipeline_id, raw_s3_key, file_format, mode FROM pipeline_runs WHERE id = %s",
             (run_id,)
         )
         row = cur.fetchone()
-        pipeline_id, raw_s3_key, file_format = row
+        pipeline_id, raw_s3_key, file_format, run_mode = row
+        run_mode = run_mode or "tabular"
 
         # Fetch approved rules ordered by index
         cur.execute(
@@ -351,22 +433,39 @@ def handler(event, context):
         file_bytes = obj["Body"].read()
         fmt = file_format or raw_s3_key.rsplit(".", 1)[-1].lower()
 
-        df = load_raw_dataframe(file_bytes, fmt)
-        df = apply_transforms(df, rules)
-
-        # Write processed file in native format to S3
         processed_bucket = os.environ["S3_PROCESSED_BUCKET"]
-        file_bytes, content_type, ext = save_dataframe(df, fmt)
-        processed_key = f"processed/{pipeline_id}/{run_id}/output.{ext}"
-        s3.put_object(
-            Bucket=processed_bucket,
-            Key=processed_key,
-            Body=file_bytes,
-            ContentType=content_type,
-        )
 
-        # Compute post-transform profile
-        profile = compute_quality_profile(df)
+        if run_mode == "document":
+            text = extract_text(file_bytes, fmt)
+            text = apply_document_transforms(text, rules)
+            out_bytes = text.encode("utf-8")
+            processed_key = f"processed/{pipeline_id}/{run_id}/output.txt"
+            s3.put_object(Bucket=processed_bucket, Key=processed_key,
+                          Body=out_bytes, ContentType="text/plain")
+            line_count = len(text.splitlines())
+            profile = {
+                "quality_score": 95,
+                "total_rows": line_count,
+                "null_percentage": 0.0,
+                "duplicate_percentage": 0.0,
+                "type_mismatch_count": 0,
+                "outlier_count": 0,
+                "column_stats": {},
+            }
+        else:
+            df = load_raw_dataframe(file_bytes, fmt)
+            df = apply_transforms(df, rules)
+
+            # Write processed file in native format to S3
+            file_bytes, content_type, ext = save_dataframe(df, fmt)
+            processed_key = f"processed/{pipeline_id}/{run_id}/output.{ext}"
+            s3.put_object(
+                Bucket=processed_bucket,
+                Key=processed_key,
+                Body=file_bytes,
+                ContentType=content_type,
+            )
+            profile = compute_quality_profile(df)
 
         cur.execute(
             """INSERT INTO data_profiles

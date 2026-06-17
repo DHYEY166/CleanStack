@@ -143,9 +143,11 @@ function recordsToBlob(rows: Record<string, unknown>[], fmt: Format): { blob: Bl
 export default function DownloadButton({
   runId,
   inputFormat,
+  mode = "tabular",
 }: {
   runId: string;
   inputFormat: string;
+  mode?: string;
 }) {
   const native = nativeExt(inputFormat);
   const [loading, setLoading] = useState(false);
@@ -204,6 +206,7 @@ export default function DownloadButton({
   }
 
   const nativeLabel = FORMAT_LABELS[inputFormat] ?? inputFormat.toUpperCase();
+  const isDocument = mode === "document";
   const exportOptions = EXPORT_OPTIONS.filter((o) => o.value !== native);
 
   return (
@@ -218,13 +221,15 @@ export default function DownloadButton({
           {loading ? "Preparing…" : `↓ Download ${nativeLabel}`}
         </button>
 
-        {/* Secondary: export as different format */}
-        <button
-          onClick={() => setShowExport((v) => !v)}
-          className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
-        >
-          Export As ▾
-        </button>
+        {/* Secondary: export as different format — hidden for document mode */}
+        {!isDocument && (
+          <button
+            onClick={() => setShowExport((v) => !v)}
+            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg transition-colors"
+          >
+            Export As ▾
+          </button>
+        )}
       </div>
 
       {showExport && (

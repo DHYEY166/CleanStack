@@ -1,6 +1,9 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "package"))
+
 import json
-import os
 import io
+import re
 import boto3
 import psycopg2
 import requests
@@ -9,6 +12,8 @@ import numpy as np
 
 s3 = boto3.client("s3")
 secrets = boto3.client("secretsmanager")
+
+DOCUMENT_EXTENSIONS = {"pdf", "docx", "doc"}
 
 
 def get_db_conn():
@@ -24,6 +29,59 @@ def get_db_conn():
 def detect_format(key: str, content_type: str) -> str:
     ext = key.rsplit(".", 1)[-1].lower()
     return ext
+
+
+def extract_text(file_bytes: bytes, fmt: str) -> str:
+    if fmt == "pdf":
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            pages = [page.extract_text() or "" for page in pdf.pages]
+        return "\n\n".join(pages)
+    elif fmt == "docx":
+        from docx import Document
+        doc = Document(io.BytesIO(file_bytes))
+        return "\n".join(p.text for p in doc.paragraphs)
+    else:
+        return file_bytes.decode("utf-8", errors="replace")
+
+
+def profile_document(text: str) -> dict:
+    words = text.split()
+    lines = text.splitlines()
+
+    email_count = len(re.findall(r'[\w.+-]+@[\w-]+\.\w+', text))
+    phone_count = len(re.findall(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', text))
+    ssn_count   = len(re.findall(r'\b\d{3}-\d{2}-\d{4}\b', text))
+    cc_count    = len(re.findall(r'\b(?:\d{4}[- ]?){3}\d{4}\b', text))
+    html_tags   = len(re.findall(r'<[^>]+>', text))
+    blank_lines = sum(1 for l in lines if not l.strip())
+
+    pii_count = email_count + phone_count + ssn_count + cc_count
+    pii_penalty   = min(pii_count * 5, 40)
+    html_penalty  = min(html_tags * 0.5, 20)
+    blank_penalty = min(blank_lines / max(len(lines), 1) * 100 * 0.3, 20)
+    quality_score = max(0, round(100 - pii_penalty - html_penalty - blank_penalty))
+
+    return {
+        "quality_score": quality_score,
+        "total_rows": len(lines),
+        "word_count": len(words),
+        "char_count": len(text),
+        "blank_line_count": blank_lines,
+        "pii_detected": {
+            "emails": email_count,
+            "phones": phone_count,
+            "ssns": ssn_count,
+            "credit_cards": cc_count,
+        },
+        "html_tag_count": html_tags,
+        "sample_text": text[:500],
+        "null_percentage": 0.0,
+        "duplicate_percentage": 0.0,
+        "type_mismatch_count": 0,
+        "outlier_count": 0,
+        "column_stats": {},
+    }
 
 
 def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
@@ -44,13 +102,11 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
                 return pd.read_json(io.BytesIO(file_bytes), lines=True)
             except Exception:
                 pass
-        # Try array of records first
         try:
             parsed = json.loads(text)
             if isinstance(parsed, list):
-                return pd.json_normalize(parsed)  # handles nested objects too
+                return pd.json_normalize(parsed)
             elif isinstance(parsed, dict):
-                # Could be {data: [...]} or a single record
                 for v in parsed.values():
                     if isinstance(v, list):
                         return pd.json_normalize(v)
@@ -75,7 +131,7 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
         return pd.DataFrame(rows)
 
     else:
-        raise ValueError(f"Unsupported format: {fmt}. Supported: csv, tsv, txt, json, jsonl, xlsx, xls, xml")
+        raise ValueError(f"Unsupported format: {fmt}")
 
 
 def compute_quality_score(df: pd.DataFrame) -> dict:
@@ -156,17 +212,21 @@ def handler(event, context):
         )
         conn.commit()
 
-        df = load_dataframe(file_bytes, fmt)
+        # Determine mode
+        if fmt in DOCUMENT_EXTENSIONS:
+            mode = "document"
+        elif fmt == "txt":
+            # Try tabular first; fall back to document if < 3 columns
+            try:
+                df_test = load_dataframe(file_bytes, fmt)
+                mode = "tabular" if len(df_test.columns) >= 3 else "document"
+            except Exception:
+                mode = "document"
+        else:
+            mode = "tabular"
 
-        if df.empty or len(df.columns) <= 1:
-            raise ValueError(
-                f"File could not be parsed as structured tabular data "
-                f"({len(df.columns)} column(s), {len(df)} row(s) detected). "
-                f"CleanStack requires structured data with multiple columns (CSV, Excel, JSON array, XML list). "
-                f"Unstructured text, deeply nested JSON, and complex XML trees are not supported."
-            )
-
-        profile = compute_quality_score(df)
+        cur.execute("UPDATE pipeline_runs SET mode = %s WHERE id = %s", (mode, run_id))
+        conn.commit()
 
         class _NpEncoder(json.JSONEncoder):
             def default(self, obj):
@@ -174,6 +234,19 @@ def handler(event, context):
                 if isinstance(obj, (np.floating,)): return float(obj)
                 if isinstance(obj, np.ndarray): return obj.tolist()
                 return super().default(obj)
+
+        if mode == "document":
+            text = extract_text(file_bytes, fmt)
+            profile = profile_document(text)
+        else:
+            df = load_dataframe(file_bytes, fmt)
+            if df.empty or len(df.columns) <= 1:
+                raise ValueError(
+                    f"File could not be parsed as structured tabular data "
+                    f"({len(df.columns)} column(s), {len(df)} row(s) detected). "
+                    f"CleanStack requires structured data with multiple columns."
+                )
+            profile = compute_quality_score(df)
 
         cur.execute(
             """INSERT INTO data_profiles
@@ -188,7 +261,7 @@ def handler(event, context):
                 float(profile["duplicate_percentage"]),
                 int(profile["type_mismatch_count"]),
                 int(profile["outlier_count"]),
-                json.dumps(profile["column_stats"], cls=_NpEncoder),
+                json.dumps(profile.get("column_stats", {}), cls=_NpEncoder),
             ),
         )
 
