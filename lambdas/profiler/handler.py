@@ -39,15 +39,28 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
 
     elif fmt in ("json", "jsonl"):
         text = file_bytes.decode("utf-8", errors="replace").strip()
-        if fmt == "jsonl" or (text and text[0] != "[" and text[0] != "{" is False and "\n" in text):
+        if fmt == "jsonl":
             try:
                 return pd.read_json(io.BytesIO(file_bytes), lines=True)
             except Exception:
                 pass
+        # Try array of records first
         try:
-            return pd.read_json(io.BytesIO(file_bytes))
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return pd.json_normalize(parsed)  # handles nested objects too
+            elif isinstance(parsed, dict):
+                # Could be {data: [...]} or a single record
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        return pd.json_normalize(v)
+                return pd.json_normalize([parsed])
         except Exception:
+            pass
+        try:
             return pd.read_json(io.BytesIO(file_bytes), lines=True)
+        except Exception:
+            return pd.read_json(io.BytesIO(file_bytes))
 
     elif fmt in ("xlsx", "xls"):
         xl = pd.ExcelFile(buf)
@@ -144,6 +157,15 @@ def handler(event, context):
         conn.commit()
 
         df = load_dataframe(file_bytes, fmt)
+
+        if df.empty or len(df.columns) <= 1:
+            raise ValueError(
+                f"File could not be parsed as structured tabular data "
+                f"({len(df.columns)} column(s), {len(df)} row(s) detected). "
+                f"CleanStack requires structured data with multiple columns (CSV, Excel, JSON array, XML list). "
+                f"Unstructured text, deeply nested JSON, and complex XML trees are not supported."
+            )
+
         profile = compute_quality_score(df)
 
         class _NpEncoder(json.JSONEncoder):

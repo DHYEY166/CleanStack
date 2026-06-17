@@ -34,13 +34,25 @@ def load_raw_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
         return pd.read_csv(io.BytesIO(file_bytes), sep=sep, low_memory=False)
     elif fmt == "tsv":
         return pd.read_csv(buf, sep="\t", low_memory=False)
-    elif fmt == "json":
+    elif fmt in ("json", "jsonl"):
+        text = file_bytes.decode("utf-8", errors="replace").strip()
+        if fmt == "jsonl":
+            try:
+                return pd.read_json(io.BytesIO(file_bytes), lines=True)
+            except Exception:
+                pass
         try:
-            return pd.read_json(buf)
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return pd.json_normalize(parsed)
+            elif isinstance(parsed, dict):
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        return pd.json_normalize(v)
+                return pd.json_normalize([parsed])
         except Exception:
-            return pd.read_json(buf, lines=True)
-    elif fmt == "jsonl":
-        return pd.read_json(buf, lines=True)
+            pass
+        return pd.read_json(io.BytesIO(file_bytes), lines=True)
     elif fmt in ("xlsx", "xls"):
         xl = pd.ExcelFile(buf)
         return xl.parse(xl.sheet_names[0])
