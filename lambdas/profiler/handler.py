@@ -318,10 +318,15 @@ def handler(event, context):
     bucket = record["bucket"]["name"]
     key    = record["object"]["key"].replace("+", " ")
 
+    parts = key.split("/")
+    if len(parts) < 4:
+        print(f"[profiler] Skipping non-run key: {key}")
+        return {"statusCode": 200, "body": "skipped"}
+
     obj        = s3.get_object(Bucket=bucket, Key=key)
     file_bytes = obj["Body"].read()
     fmt        = detect_format(key, obj.get("ContentType", ""))
-    run_id     = key.split("/")[2]
+    run_id     = parts[2]
 
     conn = get_db_conn()
     cur  = conn.cursor()
