@@ -86,6 +86,88 @@ def extract_text(file_bytes: bytes, fmt: str) -> str:
         return file_bytes.decode("utf-8", errors="replace")
 
 
+def apply_transforms_pdf(file_bytes: bytes, rules: list[dict]) -> tuple[bytes, str, str]:
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+
+    for page in doc:
+        page_text = page.get_text("text")
+
+        for rule in rules:
+            rtype = rule["rule_type"]
+            params = _parse_params_simple(rule.get("parameters", {}))
+            try:
+                if rtype == "strip_pii":
+                    patterns = [
+                        r'[\w.+-]+@[\w-]+\.\w+',
+                        r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',
+                        r'\b\d{3}-\d{2}-\d{4}\b',
+                        r'\b(?:\d{4}[- ]?){3}\d{4}\b',
+                    ]
+                    replacements = ["[EMAIL REDACTED]", "[PHONE REDACTED]", "[SSN REDACTED]", "[CC REDACTED]"]
+                    for pat, repl in zip(patterns, replacements):
+                        for match in set(re.findall(pat, page_text)):
+                            for area in page.search_for(match):
+                                page.add_redact_annot(area, text=repl, fontsize=8)
+
+                elif rtype == "redact_pattern":
+                    pattern = params.get("pattern", "")
+                    replacement = str(params.get("replacement", "[REDACTED]"))
+                    if pattern:
+                        for match in set(re.findall(pattern, page_text)):
+                            for area in page.search_for(str(match)):
+                                page.add_redact_annot(area, text=replacement, fontsize=8)
+
+                elif rtype == "remove_headers_footers":
+                    from collections import Counter
+                    lines = page_text.splitlines()
+                    counts = Counter(l.strip() for l in lines if l.strip())
+                    for line, cnt in counts.items():
+                        if cnt >= 2 and len(line) < 120:
+                            for area in page.search_for(line):
+                                page.add_redact_annot(area)
+
+            except Exception as e:
+                print(f"[executor] PDF rule {rtype} failed: {e}")
+
+        page.apply_redactions()
+
+    buf = io.BytesIO()
+    doc.save(buf, deflate=True)
+    doc.close()
+    return buf.getvalue(), "application/pdf", "pdf"
+
+
+def apply_transforms_docx(file_bytes: bytes, rules: list[dict]) -> tuple[bytes, str, str]:
+    from docx import Document
+
+    doc = Document(io.BytesIO(file_bytes))
+
+    def fix_paragraph(para):
+        if not para.text.strip():
+            return
+        new_text = apply_document_transforms(para.text, rules)
+        if new_text == para.text:
+            return
+        if para.runs:
+            para.runs[0].text = new_text
+            for run in para.runs[1:]:
+                run.text = ""
+
+    for para in doc.paragraphs:
+        fix_paragraph(para)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    fix_paragraph(para)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"
+
+
 def apply_document_transforms(text: str, rules: list[dict]) -> str:
     for rule in rules:
         rtype = rule["rule_type"]
@@ -422,10 +504,20 @@ def handler(event, context):
                ORDER BY order_index ASC""",
             (run_id,)
         )
-        rules = [
+        all_rules = [
             {"rule_type": r[0], "column_name": r[1], "parameters": r[2]}
             for r in cur.fetchall()
         ]
+
+        # Deduplicate document rules by rule_type (S3 at-least-once can produce duplicates).
+        # For tabular rules, dedup by (rule_type, column_name) to keep per-column rules.
+        seen_doc: set[str] = set()
+        rules = []
+        for r in all_rules:
+            key = r["rule_type"] if r["column_name"] is None else f"{r['rule_type']}::{r['column_name']}"
+            if key not in seen_doc:
+                seen_doc.add(key)
+                rules.append(r)
 
         # Read raw file from S3
         raw_bucket = os.environ["S3_RAW_BUCKET"]
@@ -436,20 +528,35 @@ def handler(event, context):
         processed_bucket = os.environ["S3_PROCESSED_BUCKET"]
 
         if run_mode == "document":
-            # Read pre-extracted text saved by profiler (avoids pdfplumber in executor)
             text_key = "/".join(raw_s3_key.rsplit("/", 1)[:-1]) + "/extracted_text.txt"
+
+            if fmt == "pdf":
+                out_bytes, content_type, ext = apply_transforms_pdf(file_bytes, rules)
+            elif fmt == "docx":
+                out_bytes, content_type, ext = apply_transforms_docx(file_bytes, rules)
+            else:
+                # txt and other text formats — use pre-extracted text
+                try:
+                    text_obj = s3.get_object(Bucket=raw_bucket, Key=text_key)
+                    text = text_obj["Body"].read().decode("utf-8")
+                except Exception:
+                    text = extract_text(file_bytes, fmt)
+                text = apply_document_transforms(text, rules)
+                out_bytes = text.encode("utf-8")
+                content_type = "text/plain"
+                ext = "txt"
+
+            processed_key = f"processed/{pipeline_id}/{run_id}/output.{ext}"
+            s3.put_object(Bucket=processed_bucket, Key=processed_key,
+                          Body=out_bytes, ContentType=content_type)
+
+            # Line count from extracted text for all doc formats
             try:
                 text_obj = s3.get_object(Bucket=raw_bucket, Key=text_key)
-                text = text_obj["Body"].read().decode("utf-8")
+                line_count = len(text_obj["Body"].read().decode("utf-8").splitlines())
             except Exception:
-                # Fallback: extract in-place
-                text = extract_text(file_bytes, fmt)
-            text = apply_document_transforms(text, rules)
-            out_bytes = text.encode("utf-8")
-            processed_key = f"processed/{pipeline_id}/{run_id}/output.txt"
-            s3.put_object(Bucket=processed_bucket, Key=processed_key,
-                          Body=out_bytes, ContentType="text/plain")
-            line_count = len(text.splitlines())
+                line_count = len(out_bytes.decode("utf-8", errors="replace").splitlines())
+
             profile = {
                 "quality_score": 95,
                 "total_rows": line_count,

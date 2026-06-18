@@ -14,6 +14,8 @@ const FORMAT_LABELS: Record<string, string> = {
   xls:   "Excel (XLSX)",
   xml:   "XML",
   txt:   "TXT",
+  pdf:   "PDF",
+  docx:  "DOCX",
 };
 
 const EXPORT_OPTIONS: { value: Format; label: string }[] = [
@@ -24,9 +26,9 @@ const EXPORT_OPTIONS: { value: Format; label: string }[] = [
   { value: "xlsx",  label: "Excel (XLSX)" },
 ];
 
-function nativeExt(fmt: string): Format {
+function nativeExt(fmt: string): string {
   if (fmt === "xls") return "xlsx";
-  return (fmt as Format) || "csv";
+  return fmt || "csv";
 }
 
 function triggerDownload(blob: Blob, name: string) {
@@ -150,7 +152,7 @@ export default function DownloadButton({
   mode?: string;
 }) {
   const isDocument = mode === "document";
-  const native = isDocument ? "txt" : nativeExt(inputFormat);
+  const native = nativeExt(inputFormat);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportFmt, setExportFmt] = useState<Format>("csv");
@@ -169,7 +171,7 @@ export default function DownloadButton({
         throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
       }
       const buf = await res.arrayBuffer();
-      const mimes: Record<Format, string> = {
+      const mimes: Record<string, string> = {
         csv:   "text/csv",
         txt:   "text/plain",
         tsv:   "text/tab-separated-values",
@@ -177,8 +179,10 @@ export default function DownloadButton({
         jsonl: "application/x-ndjson",
         xlsx:  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         xml:   "application/xml",
+        pdf:   "application/pdf",
+        docx:  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       };
-      triggerDownload(new Blob([buf], { type: mimes[native] }), `${filename}.${native}`);
+      triggerDownload(new Blob([buf], { type: mimes[native] ?? "application/octet-stream" }), `${filename}.${native}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     } finally {
@@ -206,7 +210,7 @@ export default function DownloadButton({
     }
   }
 
-  const nativeLabel = isDocument ? "TXT" : (FORMAT_LABELS[inputFormat] ?? inputFormat.toUpperCase());
+  const nativeLabel = FORMAT_LABELS[inputFormat] ?? inputFormat.toUpperCase();
   const exportOptions = EXPORT_OPTIONS.filter((o) => o.value !== native);
 
   return (

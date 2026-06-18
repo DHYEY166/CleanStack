@@ -209,11 +209,19 @@ def handler(event, context):
     cur = conn.cursor()
 
     try:
+        # Atomic claim: S3 delivers at-least-once — only first invocation processes.
         cur.execute(
-            "UPDATE pipeline_runs SET status = 'profiling' WHERE id = %s",
+            "UPDATE pipeline_runs SET status = 'profiling' WHERE id = %s AND status = 'pending' RETURNING id",
             (run_id,)
         )
+        claimed = cur.fetchone()
         conn.commit()
+
+        if not claimed:
+            print(f"[profiler] Run {run_id} already claimed — skipping duplicate invocation")
+            cur.close()
+            conn.close()
+            return {"statusCode": 200, "run_id": run_id, "skipped": True}
 
         # Determine mode
         if fmt in DOCUMENT_EXTENSIONS:

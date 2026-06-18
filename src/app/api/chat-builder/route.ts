@@ -1,5 +1,5 @@
 import { convertToModelMessages, streamText, UIMessage } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { bedrock } from "@ai-sdk/amazon-bedrock";
 
 export const maxDuration = 60;
 
@@ -7,7 +7,11 @@ const SYSTEM = `You are a data pipeline configuration expert for CleanStack, a d
 
 When a user describes their data, respond conversationally explaining what you'll do, then output a JSON config block.
 
-Supported rule types: drop_nulls, deduplicate, type_cast, rename, filter, normalize, fill_nulls, trim_whitespace
+Tabular rule types (for CSV, Excel, JSON, etc.):
+  drop_nulls, deduplicate, type_cast, rename, filter, normalize, fill_nulls, trim_whitespace
+
+Document rule types (for PDF, DOCX, TXT contracts/reports):
+  strip_pii, normalize_whitespace, strip_html, fix_encoding, remove_blank_lines, remove_headers_footers, redact_pattern
 
 Always end your response with exactly one fenced JSON block:
 \`\`\`json
@@ -17,7 +21,7 @@ Always end your response with exactly one fenced JSON block:
   "rules": [
     {
       "rule_type": "<rule_type>",
-      "column_name": "<column or null for table-level rules>",
+      "column_name": "<column name for tabular, null for document rules>",
       "parameters": {},
       "ai_reasoning": "<one sentence explaining why>"
     }
@@ -26,13 +30,14 @@ Always end your response with exactly one fenced JSON block:
 \`\`\`
 
 Suggest 4–7 rules ordered by impact. Be specific about column names the user mentions.
-If no column names are given, use realistic guesses based on the data type described.`;
+If no column names are given, use realistic guesses based on the data type described.
+For document/contract/report data, use document rule types instead of tabular ones.`;
 
 export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
 
   const result = streamText({
-    model: anthropic("claude-sonnet-4-6"),
+    model: bedrock("us.anthropic.claude-sonnet-4-6"),
     system: SYSTEM,
     messages: await convertToModelMessages(messages),
   });
