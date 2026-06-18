@@ -16,8 +16,8 @@ export async function POST(
   const { runId } = await params;
 
   // Fetch run — must belong to user's team
-  const run = await queryOne<PipelineRun & { mode: string }>(
-    `SELECT pr.*, p.mode
+  const run = await queryOne<PipelineRun>(
+    `SELECT pr.*
      FROM pipeline_runs pr
      JOIN pipelines p ON pr.pipeline_id = p.id
      WHERE pr.id = $1 AND p.team_id = $2`,
