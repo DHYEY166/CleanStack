@@ -11,6 +11,7 @@ import SchemaDiffViewer from "@/components/SchemaDiffViewer";
 import DownloadButton from "@/components/DownloadButton";
 import RunStatusPoller from "@/components/RunStatusPoller";
 import DocumentProfile from "@/components/DocumentProfile";
+import TrainingExport from "@/components/TrainingExport";
 
 export default async function RunDetailPage({
   params,
@@ -157,6 +158,11 @@ export default async function RunDetailPage({
             </div>
           )}
         </div>
+
+        {/* AI Training Export — tabular completed runs only */}
+        {canDownload && run.mode !== "document" && (
+          <TrainingExport runId={rid} />
+        )}
 
         {/* Quality score gauges */}
         {(rawProfile || processedProfile) && (
