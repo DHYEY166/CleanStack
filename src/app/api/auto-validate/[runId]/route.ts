@@ -104,8 +104,8 @@ export async function POST(
 
   const colStats = rawProfile?.column_stats ?? {};
   const totalRows = rawProfile?.total_rows ?? 0;
-  const nullPct = rawProfile?.null_percentage ?? 0;
-  const dupPct = rawProfile?.duplicate_percentage ?? 0;
+  const nullPct = Number(rawProfile?.null_percentage ?? 0);
+  const dupPct = Number(rawProfile?.duplicate_percentage ?? 0);
 
   // Build rule list string for prompts
   const ruleList = rules.map((r, i) =>

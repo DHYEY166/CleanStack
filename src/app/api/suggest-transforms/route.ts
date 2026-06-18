@@ -278,10 +278,16 @@ IMPORTANT RULES:
     );
     if (run.auto_mode) {
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-      await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
+      const avRes = await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
         method: "POST",
         headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
-      }).catch(console.error);
+      });
+      if (!avRes.ok) {
+        const body = await avRes.text().catch(() => "");
+        console.error(`[suggest-transforms] auto-validate ${avRes.status}: ${body}`);
+        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+          [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
+      }
     } else {
       await queryOne("UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1", [run_id]);
     }
@@ -534,10 +540,16 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
 
   if (run.auto_mode) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-    await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
+    const avRes = await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
       method: "POST",
       headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
-    }).catch(console.error);
+    });
+    if (!avRes.ok) {
+      const body = await avRes.text().catch(() => "");
+      console.error(`[suggest-transforms] auto-validate ${avRes.status}: ${body}`);
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
+    }
   } else {
     await queryOne(
       "UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1",
