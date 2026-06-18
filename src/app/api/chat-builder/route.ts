@@ -8,7 +8,8 @@ const SYSTEM = `You are a data pipeline configuration expert for CleanStack, a d
 When a user describes their data, respond conversationally explaining what you'll do, then output a JSON config block.
 
 Tabular rule types (for CSV, Excel, JSON, etc.):
-  drop_nulls, deduplicate, type_cast, rename, filter, normalize, fill_nulls, trim_whitespace
+  drop_nulls, deduplicate, semantic_deduplicate, type_cast, rename, filter, normalize, fill_nulls, trim_whitespace
+  semantic_deduplicate: use when text columns likely have near-duplicate rows (paraphrased, slightly edited). params: {threshold: 0.8, num_perm: 128}
 
 Document rule types (for PDF, DOCX, TXT contracts/reports):
   strip_pii, normalize_whitespace, strip_html, fix_encoding, remove_blank_lines, remove_headers_footers, redact_pattern

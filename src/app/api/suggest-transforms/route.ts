@@ -11,6 +11,7 @@ const ruleSchema = z.object({
   rule_type: z.enum([
     "drop_nulls",
     "deduplicate",
+    "semantic_deduplicate",
     "type_cast",
     "rename",
     "filter",
@@ -406,6 +407,11 @@ filter:
 rename:
   column_name: "OldName"
   parameters: {"new_name": "new_snake_case_name"}
+
+semantic_deduplicate:
+  column_name: "text_column"   ← the column to compute similarity on (pick the most descriptive text column)
+  parameters: {"threshold": 0.8, "num_perm": 128}
+  Use when: a text column likely contains near-duplicate rows (paraphrased, slightly edited, copy-pasted content) that exact dedup would miss. Good for description, notes, review, comment, summary, message columns.
 
 ---
 

@@ -324,6 +324,33 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                 subset = [col] if col and col in df.columns else None
                 df = df.drop_duplicates(subset=subset, keep="first")
 
+            elif rtype == "semantic_deduplicate":
+                target_col = col if col and col in df.columns else None
+                if target_col is None:
+                    obj_cols = df.select_dtypes(include="object").columns.tolist()
+                    target_col = obj_cols[0] if obj_cols else None
+                if target_col:
+                    threshold = float(params.get("threshold", 0.8))
+                    num_perm  = int(params.get("num_perm", 64))
+
+                    def _minhash_sig(text: str, n: int) -> list:
+                        tokens = set(text.lower().split()) or {""}
+                        return [min((hash((seed, t)) & 0x7FFFFFFF) for t in tokens) for seed in range(n)]
+
+                    texts = df[target_col].astype(str).tolist()
+                    sigs  = [_minhash_sig(t, num_perm) for t in texts]
+                    keep  = []
+                    kept_sigs: list = []
+                    for i, sig in enumerate(sigs):
+                        is_dup = any(
+                            sum(a == b for a, b in zip(sig, ks)) / num_perm >= threshold
+                            for ks in kept_sigs
+                        )
+                        if not is_dup:
+                            keep.append(i)
+                            kept_sigs.append(sig)
+                    df = df.iloc[keep].reset_index(drop=True)
+
             elif rtype == "type_cast":
                 if col and col in df.columns:
                     target = params.get("target_type", "str")
