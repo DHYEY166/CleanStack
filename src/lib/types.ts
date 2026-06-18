@@ -38,6 +38,8 @@ export interface PipelineRun {
   completed_at: string | null;
   error_message: string | null;
   created_at: string;
+  iteration: number;
+  parent_run_id: string | null;
 }
 
 export interface DataProfile {

@@ -12,6 +12,7 @@ import DownloadButton from "@/components/DownloadButton";
 import RunStatusPoller from "@/components/RunStatusPoller";
 import DocumentProfile from "@/components/DocumentProfile";
 import TrainingExport from "@/components/TrainingExport";
+import IterationBanner from "@/components/IterationBanner";
 
 export default async function RunDetailPage({
   params,
@@ -30,7 +31,7 @@ export default async function RunDetailPage({
   );
   if (!run) notFound();
 
-  const [rawProfile, processedProfile, rules, trendRuns, schemaDriftData] = await Promise.all([
+  const [rawProfile, processedProfile, rules, trendRuns, schemaDriftData, parentProcessedProfile] = await Promise.all([
     queryOne<DataProfile>(
       "SELECT * FROM data_profiles WHERE run_id = $1 AND stage = 'raw'",
       [rid]
@@ -61,9 +62,32 @@ export default async function RunDetailPage({
        LIMIT 2`,
       [run.pipeline_id]
     ),
+    // Fetch parent run's processed score for % improvement calculation
+    run.parent_run_id
+      ? queryOne<DataProfile>(
+          "SELECT * FROM data_profiles WHERE run_id = $1 AND stage = 'processed'",
+          [run.parent_run_id]
+        )
+      : Promise.resolve(null),
   ]);
 
   const canDownload = run.status === "completed" && !!run.processed_s3_key;
+
+  // % improvement = (this_pass_processed - parent_processed) / parent_processed * 100
+  // rawProfile.quality_score for an iterate run equals parent's processed score (same file)
+  const iterationImprovement =
+    canDownload &&
+    run.parent_run_id &&
+    processedProfile?.quality_score != null &&
+    parentProcessedProfile?.quality_score != null &&
+    parentProcessedProfile.quality_score > 0
+      ? Math.round(
+          ((processedProfile.quality_score - parentProcessedProfile.quality_score) /
+            parentProcessedProfile.quality_score) *
+            100 *
+            10
+        ) / 10
+      : null;
 
   const trendData = trendRuns
     .filter((r) => r.quality_score != null)
@@ -162,6 +186,17 @@ export default async function RunDetailPage({
         {/* AI Training Export — tabular completed runs only */}
         {canDownload && run.mode !== "document" && (
           <TrainingExport runId={rid} />
+        )}
+
+        {/* Multi-pass iteration banner — show on all completed runs */}
+        {canDownload && (
+          <IterationBanner
+            runId={rid}
+            pipelineId={id}
+            iteration={run.iteration ?? 1}
+            improvement={iterationImprovement}
+            processedScore={processedProfile?.quality_score ?? null}
+          />
         )}
 
         {/* Quality score gauges */}

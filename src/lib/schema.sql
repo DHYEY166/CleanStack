@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   started_at TIMESTAMPTZ,
   completed_at TIMESTAMPTZ,
   error_message TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
+  created_at TIMESTAMPTZ DEFAULT now(),
+  iteration INTEGER NOT NULL DEFAULT 1,
+  parent_run_id UUID REFERENCES pipeline_runs(id) ON DELETE SET NULL
 );
 
 -- Data quality profile (before & after)
