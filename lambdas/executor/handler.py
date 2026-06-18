@@ -215,6 +215,23 @@ def apply_document_transforms(text: str, rules: list[dict]) -> str:
                 if pattern:
                     text = re.sub(pattern, str(replacement), text)
 
+            elif rtype == "ner_redact":
+                entities   = params.get("entities", ["PERSON", "ORG", "GPE", "DATE"])
+                repl_token = str(params.get("replacement", "[REDACTED]"))
+                if "PERSON" in entities:
+                    text = re.sub(r'\b(?:Mr|Mrs|Ms|Dr|Prof)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b', repl_token, text)
+                    text = re.sub(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', repl_token, text)
+                if "ORG" in entities:
+                    text = re.sub(r'\b[A-Z][A-Za-z\s&,\.]{2,50}(?:Inc|LLC|Ltd|LLP|Corp|Co|Company|Group|Holdings|Technologies|Solutions|Services|Associates|Consulting|Industries|Enterprises)\.?\b', repl_token, text)
+                if "GPE" in entities:
+                    text = re.sub(r'\b\d{1,5}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}(?:\s+(?:St|Ave|Blvd|Rd|Dr|Ln|Way|Ct|Pl|Terrace|Circle|Drive|Street|Avenue|Road|Lane|Court|Place)\.?)?\b', repl_token, text)
+                    text = re.sub(r'\b\d{5}(?:-\d{4})?\b', repl_token, text)
+                if "DATE" in entities:
+                    text = re.sub(r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b', repl_token, text)
+                    text = re.sub(r'\b\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\b', repl_token, text)
+                if "IP" in entities:
+                    text = re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', repl_token, text)
+
         except Exception as e:
             print(f"[executor] skipping doc rule {rtype}: {e}")
 
@@ -428,6 +445,62 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                 targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
                 for c in targets:
                     df[c] = df[c].astype(str).str.strip()
+                    df[c] = df[c].replace({"nan": None, "": None})
+
+            elif rtype == "ner_redact":
+                entities   = params.get("entities", ["PERSON", "ORG", "GPE", "DATE"])
+                repl_token = str(params.get("replacement", "[REDACTED]"))
+                targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
+
+                _NER_PATTERNS: list[tuple[str, str]] = []
+                if "PERSON" in entities:
+                    _NER_PATTERNS += [
+                        # Title + name  (Mr. John Smith)
+                        (r'\b(?:Mr|Mrs|Ms|Dr|Prof)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b', repl_token),
+                        # First Last (two capitalised words, 3+ chars each, not start of sentence POS)
+                        (r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', repl_token),
+                    ]
+                if "ORG" in entities:
+                    _NER_PATTERNS += [
+                        (r'\b[A-Z][A-Za-z\s&,\.]{2,50}(?:Inc|LLC|Ltd|LLP|Corp|Co|Company|Group|Holdings|Technologies|Solutions|Services|Associates|Consulting|Industries|Enterprises)\.?\b', repl_token),
+                    ]
+                if "GPE" in entities:
+                    _us_states = (
+                        "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|"
+                        "Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|"
+                        "Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|"
+                        "Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|"
+                        "New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|"
+                        "Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|"
+                        "Virginia|Washington|West Virginia|Wisconsin|Wyoming"
+                    )
+                    _NER_PATTERNS += [
+                        # US street address
+                        (r'\b\d{1,5}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}(?:\s+(?:St|Ave|Blvd|Rd|Dr|Ln|Way|Ct|Pl|Terrace|Circle|Drive|Street|Avenue|Road|Lane|Court|Place)\.?)?\b', repl_token),
+                        # US state names
+                        (rf'\b(?:{_us_states})\b', repl_token),
+                        # US ZIP code
+                        (r'\b\d{5}(?:-\d{4})?\b', repl_token),
+                    ]
+                if "DATE" in entities:
+                    _NER_PATTERNS += [
+                        # Month DD, YYYY
+                        (r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b', repl_token),
+                        # MM/DD/YYYY or DD/MM/YYYY
+                        (r'\b\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\b', repl_token),
+                    ]
+                if "IP" in entities:
+                    _NER_PATTERNS += [
+                        (r'\b(?:\d{1,3}\.){3}\d{1,3}\b', repl_token),
+                    ]
+
+                def _apply_ner(text: str) -> str:
+                    for pattern, replacement in _NER_PATTERNS:
+                        text = re.sub(pattern, replacement, text)
+                    return text
+
+                for c in targets:
+                    df[c] = df[c].astype(str).apply(_apply_ner)
                     df[c] = df[c].replace({"nan": None, "": None})
 
         except Exception as e:

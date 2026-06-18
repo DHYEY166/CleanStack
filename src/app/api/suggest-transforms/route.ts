@@ -12,6 +12,7 @@ const ruleSchema = z.object({
     "drop_nulls",
     "deduplicate",
     "semantic_deduplicate",
+    "ner_redact",
     "type_cast",
     "rename",
     "filter",
@@ -27,6 +28,7 @@ const ruleSchema = z.object({
 const documentRuleSchema = z.object({
   rule_type: z.enum([
     "strip_pii",
+    "ner_redact",
     "normalize_whitespace",
     "strip_html",
     "fix_encoding",
@@ -150,8 +152,12 @@ Suggest 3-6 document cleaning rules. Only suggest rules for issues actually pres
 
 Available rule types (each can only be used once):
 
-strip_pii — redacts ALL PII types (emails, phones, SSNs, credit cards) in one pass
-  Use when: any PII count > 0. Covers all PII in one rule — do NOT also add redact_pattern for the same PII.
+strip_pii — redacts emails, phones, SSNs, credit cards via regex
+  Use when: any PII count > 0. Covers regex-detectable PII in one rule.
+
+ner_redact — redacts named entities: PERSON (names), ORG (companies), GPE (addresses/locations), DATE, IP
+  Use when: document contains person names, company names, street addresses, or dates that strip_pii doesn't catch.
+  parameters: {"entities": ["PERSON","ORG","GPE","DATE"], "replacement": "[REDACTED]"}
 
 normalize_whitespace — normalises spaces, tabs, and excessive newlines
   Use when: sample text shows inconsistent spacing
@@ -412,6 +418,11 @@ semantic_deduplicate:
   column_name: "text_column"   ← the column to compute similarity on (pick the most descriptive text column)
   parameters: {"threshold": 0.8, "num_perm": 128}
   Use when: a text column likely contains near-duplicate rows (paraphrased, slightly edited, copy-pasted content) that exact dedup would miss. Good for description, notes, review, comment, summary, message columns.
+
+ner_redact:
+  column_name: null (all text columns) or specific column
+  parameters: {"entities": ["PERSON","ORG","GPE","DATE","IP"], "replacement": "[REDACTED]"}
+  Use when: data destined for AI training and contains person names, company names, addresses, dates, or IPs that should be anonymised beyond basic PII (email/phone/SSN already covered by strip_pii). Pick only the entity types actually present in the data.
 
 ---
 

@@ -12,7 +12,8 @@ Tabular rule types (for CSV, Excel, JSON, etc.):
   semantic_deduplicate: use when text columns likely have near-duplicate rows (paraphrased, slightly edited). params: {threshold: 0.8, num_perm: 128}
 
 Document rule types (for PDF, DOCX, TXT contracts/reports):
-  strip_pii, normalize_whitespace, strip_html, fix_encoding, remove_blank_lines, remove_headers_footers, redact_pattern
+  strip_pii, ner_redact, normalize_whitespace, strip_html, fix_encoding, remove_blank_lines, remove_headers_footers, redact_pattern
+  ner_redact: redacts named entities — PERSON (names), ORG (companies), GPE (addresses), DATE, IP. params: {entities: ["PERSON","ORG","GPE","DATE"], replacement: "[REDACTED]"}
 
 Always end your response with exactly one fenced JSON block:
 \`\`\`json
