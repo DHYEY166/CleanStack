@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   iteration INTEGER NOT NULL DEFAULT 1,
-  parent_run_id UUID REFERENCES pipeline_runs(id) ON DELETE SET NULL
+  parent_run_id UUID REFERENCES pipeline_runs(id) ON DELETE SET NULL,
+  auto_mode BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Data quality profile (before & after)

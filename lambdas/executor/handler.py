@@ -572,6 +572,75 @@ def schema_hash(df: pd.DataFrame) -> tuple[str, dict]:
     return h, col_defs
 
 
+def _maybe_auto_iterate(cur, conn, s3_client, run_id, pipeline_id, raw_s3_key, fmt,
+                         processed_key, iteration, processed_score):
+    """Check improvement vs parent and create next pass if warranted."""
+    import uuid as _uuid
+    try:
+        # Get parent processed score
+        cur.execute(
+            """SELECT dp.quality_score FROM data_profiles dp
+               JOIN pipeline_runs pr ON pr.parent_run_id IS NOT NULL AND pr.id = %s
+               JOIN data_profiles dp2 ON dp2.run_id = pr.parent_run_id AND dp2.stage = 'processed'
+               WHERE dp.run_id = %s AND dp.stage = 'raw'
+               LIMIT 1""",
+            (run_id, run_id)
+        )
+        # Simpler: fetch parent_run_id from run, then get its processed score
+        cur.execute("SELECT parent_run_id FROM pipeline_runs WHERE id = %s", (run_id,))
+        parent_row = cur.fetchone()
+        if not parent_row or not parent_row[0]:
+            return
+
+        parent_run_id = parent_row[0]
+        cur.execute(
+            "SELECT quality_score FROM data_profiles WHERE run_id = %s AND stage = 'processed'",
+            (parent_run_id,)
+        )
+        parent_score_row = cur.fetchone()
+        if not parent_score_row:
+            return
+
+        parent_score = float(parent_score_row[0])
+        if parent_score <= 0:
+            return
+
+        improvement_pct = (float(processed_score) - parent_score) / parent_score * 100
+        print(f"[executor] Auto-iterate: improvement={improvement_pct:.1f}% (pass {iteration}→{iteration+1})")
+
+        if improvement_pct < 5.0:
+            print("[executor] Improvement < 5% — stopping auto-clean loop")
+            return
+
+        # Create next pass run
+        raw_bucket = os.environ["S3_RAW_BUCKET"]
+        processed_bucket = os.environ["S3_PROCESSED_BUCKET"]
+        user_id = raw_s3_key.split("/")[0]
+        new_run_id = str(_uuid.uuid4())
+        new_raw_key = f"{user_id}/{pipeline_id}/{new_run_id}/raw.{fmt}"
+
+        # Copy processed → new raw (triggers profiler via S3 event)
+        s3_client.copy_object(
+            Bucket=raw_bucket,
+            CopySource={"Bucket": processed_bucket, "Key": processed_key},
+            Key=new_raw_key,
+        )
+
+        cur.execute(
+            """INSERT INTO pipeline_runs
+               (id, pipeline_id, status, file_format, raw_s3_key, started_at,
+                iteration, parent_run_id, auto_mode)
+               VALUES (%s, %s, 'pending', %s, %s, now(), %s, %s, TRUE)""",
+            (new_run_id, pipeline_id, fmt, new_raw_key, iteration + 1, run_id)
+        )
+        conn.commit()
+        print(f"[executor] Auto-iterate: created pass {iteration+1} run {new_run_id}")
+
+    except Exception as e:
+        print(f"[executor] Auto-iterate error (non-fatal): {e}")
+        # Don't raise — auto-iterate failure must not fail the current run
+
+
 def handler(event, context):
     record = event["Records"][0]
     body = json.loads(record["body"])
@@ -589,12 +658,14 @@ def handler(event, context):
 
         # Fetch run metadata
         cur.execute(
-            "SELECT pipeline_id, raw_s3_key, file_format, mode FROM pipeline_runs WHERE id = %s",
+            "SELECT pipeline_id, raw_s3_key, file_format, mode, iteration, parent_run_id, auto_mode, row_count_raw FROM pipeline_runs WHERE id = %s",
             (run_id,)
         )
         row = cur.fetchone()
-        pipeline_id, raw_s3_key, file_format, run_mode = row
+        pipeline_id, raw_s3_key, file_format, run_mode, iteration, parent_run_id, auto_mode, row_count_raw = row
         run_mode = run_mode or "tabular"
+        iteration = iteration or 1
+        auto_mode = auto_mode or False
 
         # Fetch approved rules ordered by index
         cur.execute(
@@ -668,7 +739,21 @@ def handler(event, context):
             }
         else:
             df = load_raw_dataframe(file_bytes, fmt)
+            input_row_count = len(df)
             df = apply_transforms(df, rules)
+
+            # Row count guard for auto-mode passes 2+ — abort if >10% rows deleted
+            if auto_mode and iteration > 1 and row_count_raw:
+                output_row_count = len(df)
+                loss_pct = (input_row_count - output_row_count) / max(input_row_count, 1)
+                if loss_pct > 0.10:
+                    print(f"[executor] Row count guard triggered: {loss_pct:.1%} loss — aborting, keeping parent output")
+                    cur.execute(
+                        "UPDATE pipeline_runs SET status = 'failed', error_message = %s WHERE id = %s",
+                        (f"Auto-clean aborted: {loss_pct:.1%} row loss exceeds 10% safety threshold", run_id),
+                    )
+                    conn.commit()
+                    return {"statusCode": 200, "run_id": run_id, "aborted": True}
 
             # Write processed file in native format to S3
             file_bytes, content_type, ext = save_dataframe(df, fmt)
@@ -711,6 +796,12 @@ def handler(event, context):
 
         # Schema drift detection — tabular only
         if run_mode == "document":
+            # Auto-iterate for document mode
+            if auto_mode and iteration < 3:
+                _maybe_auto_iterate(
+                    cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
+                    processed_key, iteration, profile["quality_score"]
+                )
             return {"statusCode": 200, "run_id": run_id}
 
         new_hash, col_defs = schema_hash(df)
@@ -744,6 +835,13 @@ def handler(event, context):
                         "new_schema": col_defs,
                     }),
                 )
+
+        # Auto-iterate for tabular mode
+        if auto_mode and iteration < 3:
+            _maybe_auto_iterate(
+                cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
+                processed_key, iteration, profile["quality_score"]
+            )
 
     except Exception as e:
         conn.rollback()

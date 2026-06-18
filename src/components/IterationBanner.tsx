@@ -7,8 +7,9 @@ interface Props {
   runId: string;
   pipelineId: string;
   iteration: number;
-  improvement: number | null; // % improvement of this pass vs prev pass raw score
+  improvement: number | null;
   processedScore: number | null;
+  autoMode?: boolean;
 }
 
 export default function IterationBanner({
@@ -17,6 +18,7 @@ export default function IterationBanner({
   iteration,
   improvement,
   processedScore,
+  autoMode = false,
 }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -27,13 +29,13 @@ export default function IterationBanner({
   const diminishing = improvement !== null && improvement < 5;
   const regressed = improvement !== null && improvement < 0;
 
-  async function handleRunNextPass() {
+  async function handleAutoClean() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/runs/${runId}/iterate`, { method: "POST" });
+      const res = await fetch(`/api/runs/${runId}/auto-clean`, { method: "POST" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to start next pass");
+      if (!res.ok) throw new Error(data.error ?? "Failed to start auto-clean");
       router.push(`/pipelines/${pipelineId}/runs/${data.run_id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -53,10 +55,12 @@ export default function IterationBanner({
     : atCap
     ? "Maximum 3 passes reached. Export your cleaned data below."
     : diminishing
-    ? "Diminishing returns — further passes unlikely to help significantly."
-    : "More gains are possible.";
+    ? "Diminishing returns — further passes unlikely to help."
+    : autoMode
+    ? "AI committee validated this pass. Further passes will also be auto-validated."
+    : "Run remaining passes automatically — AI committee reviews each rule.";
 
-  const showButton = !atCap && !regressed;
+  const showButton = !atCap && !regressed && !autoMode;
 
   return (
     <div
@@ -69,7 +73,7 @@ export default function IterationBanner({
       }`}
     >
       <div className="space-y-1">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span
             className={`text-xs font-medium px-2 py-0.5 rounded-full ${
               regressed
@@ -81,6 +85,11 @@ export default function IterationBanner({
           >
             Pass {iteration} of {maxPasses}
           </span>
+          {autoMode && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-purple-400/20 text-purple-400">
+              ⚡ Auto-cleaned
+            </span>
+          )}
         </div>
         {improvementLine && (
           <p className="text-white text-sm font-medium">{improvementLine}</p>
@@ -101,15 +110,11 @@ export default function IterationBanner({
 
       {showButton && (
         <button
-          onClick={handleRunNextPass}
+          onClick={handleAutoClean}
           disabled={loading}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex-shrink-0 ${
-            diminishing
-              ? "bg-gray-700 hover:bg-gray-600 text-gray-300"
-              : "bg-indigo-600 hover:bg-indigo-500 text-white"
-          } disabled:opacity-50 disabled:cursor-not-allowed`}
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? "Starting…" : `Run Pass ${iteration + 1} →`}
+          {loading ? "Starting…" : "⚡ Auto-Clean Remaining →"}
         </button>
       )}
     </div>

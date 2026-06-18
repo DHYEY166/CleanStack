@@ -13,6 +13,7 @@ import RunStatusPoller from "@/components/RunStatusPoller";
 import DocumentProfile from "@/components/DocumentProfile";
 import TrainingExport from "@/components/TrainingExport";
 import IterationBanner from "@/components/IterationBanner";
+import AutoCleanSummary from "@/components/AutoCleanSummary";
 
 export default async function RunDetailPage({
   params,
@@ -31,7 +32,7 @@ export default async function RunDetailPage({
   );
   if (!run) notFound();
 
-  const [rawProfile, processedProfile, rules, trendRuns, schemaDriftData, parentProcessedProfile] = await Promise.all([
+  const [rawProfile, processedProfile, rules, trendRuns, schemaDriftData, parentProcessedProfile, autoChainRuns] = await Promise.all([
     queryOne<DataProfile>(
       "SELECT * FROM data_profiles WHERE run_id = $1 AND stage = 'raw'",
       [rid]
@@ -69,12 +70,28 @@ export default async function RunDetailPage({
           [run.parent_run_id]
         )
       : Promise.resolve(null),
+    // Fetch all auto-clean sibling runs for summary (walk chain)
+    run.auto_mode
+      ? query<{ id: string; iteration: number; processed_score: number | null; parent_run_id: string | null }>(
+          `WITH RECURSIVE chain AS (
+             SELECT id, iteration, parent_run_id FROM pipeline_runs WHERE id = $1
+             UNION ALL
+             SELECT pr.id, pr.iteration, pr.parent_run_id
+             FROM pipeline_runs pr JOIN chain c ON pr.id = c.parent_run_id
+           )
+           SELECT ch.id, ch.iteration, ch.parent_run_id, dp.quality_score AS processed_score
+           FROM chain ch
+           LEFT JOIN data_profiles dp ON dp.run_id = ch.id AND dp.stage = 'processed'
+           WHERE ch.iteration > 1
+           ORDER BY ch.iteration ASC`,
+          [rid]
+        )
+      : Promise.resolve([]),
   ]);
 
   const canDownload = run.status === "completed" && !!run.processed_s3_key;
 
   // % improvement = (this_pass_processed - parent_processed) / parent_processed * 100
-  // rawProfile.quality_score for an iterate run equals parent's processed score (same file)
   const iterationImprovement =
     canDownload &&
     run.parent_run_id &&
@@ -88,6 +105,30 @@ export default async function RunDetailPage({
             10
         ) / 10
       : null;
+
+  // Build auto-clean summary passes (fetch rules per pass)
+  type PassRule = { id: string; rule_type: string; column_name: string | null; status: string; ai_reasoning: string | null; parameters: Record<string, unknown> | null };
+  const autoSummaryPasses: Array<{ iteration: number; improvement: number | null; processedScore: number | null; rules: PassRule[] }> = [];
+  if (run.auto_mode && autoChainRuns.length > 0) {
+    const passRulesArr = await Promise.all(
+      autoChainRuns.map((cr) =>
+        query<PassRule>(
+          "SELECT id, rule_type, column_name, status, ai_reasoning, parameters FROM transform_rules WHERE run_id = $1 ORDER BY order_index ASC",
+          [cr.id]
+        )
+      )
+    );
+    for (let i = 0; i < autoChainRuns.length; i++) {
+      const cr = autoChainRuns[i];
+      const prevScore = i === 0
+        ? (parentProcessedProfile?.quality_score ?? null)
+        : (autoChainRuns[i - 1].processed_score ?? null);
+      const imp = cr.processed_score != null && prevScore != null && prevScore > 0
+        ? Math.round(((cr.processed_score - prevScore) / prevScore) * 100 * 10) / 10
+        : null;
+      autoSummaryPasses.push({ iteration: cr.iteration, improvement: imp, processedScore: cr.processed_score ?? null, rules: passRulesArr[i] });
+    }
+  }
 
   const trendData = trendRuns
     .filter((r) => r.quality_score != null)
@@ -196,7 +237,13 @@ export default async function RunDetailPage({
             iteration={run.iteration ?? 1}
             improvement={iterationImprovement}
             processedScore={processedProfile?.quality_score ?? null}
+            autoMode={run.auto_mode ?? false}
           />
+        )}
+
+        {/* Auto-clean summary panel */}
+        {canDownload && run.auto_mode && autoSummaryPasses.length > 0 && (
+          <AutoCleanSummary passes={autoSummaryPasses} />
         )}
 
         {/* Quality score gauges */}

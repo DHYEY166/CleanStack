@@ -40,6 +40,7 @@ export interface PipelineRun {
   created_at: string;
   iteration: number;
   parent_run_id: string | null;
+  auto_mode: boolean;
 }
 
 export interface DataProfile {

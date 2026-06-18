@@ -276,7 +276,15 @@ IMPORTANT RULES:
         )
       )
     );
-    await queryOne("UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1", [run_id]);
+    if (run.auto_mode) {
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
+        method: "POST",
+        headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
+      }).catch(console.error);
+    } else {
+      await queryOne("UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1", [run_id]);
+    }
     return NextResponse.json({ ok: true, rules_count: docOutput.rules.length, mode: "document" });
   }
 
@@ -524,10 +532,18 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
     )
   );
 
-  await queryOne(
-    "UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1",
-    [run_id]
-  );
+  if (run.auto_mode) {
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+    fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
+      method: "POST",
+      headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
+    }).catch(console.error);
+  } else {
+    await queryOne(
+      "UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1",
+      [run_id]
+    );
+  }
 
   return NextResponse.json({ ok: true, rules_count: output.rules.length });
 }
