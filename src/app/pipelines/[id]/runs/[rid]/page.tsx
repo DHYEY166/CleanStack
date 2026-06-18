@@ -176,7 +176,7 @@ export default async function RunDetailPage({
   return (
     <div className="min-h-screen bg-gray-950">
       <Nav />
-      <RunStatusPoller runId={rid} currentStatus={run.status} />
+      <RunStatusPoller runId={rid} currentStatus={run.status} pipelineId={id} />
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         {/* Breadcrumb */}
         <div className="text-sm text-gray-500">

@@ -19,9 +19,10 @@ export async function GET(
       error_message: string | null;
       row_count_raw: number | null;
       row_count_processed: number | null;
+      auto_mode: boolean;
     }>(
       `SELECT pr.id, pr.status, pr.pipeline_id, pr.error_message,
-              pr.row_count_raw, pr.row_count_processed
+              pr.row_count_raw, pr.row_count_processed, pr.auto_mode
        FROM pipeline_runs pr
        JOIN pipelines p ON pr.pipeline_id = p.id
        WHERE pr.id = $1 AND p.team_id = $2`,
@@ -30,7 +31,17 @@ export async function GET(
 
     if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
 
-    return NextResponse.json({ run });
+    // If auto_mode and completed, look for a child run created by executor auto-iterate
+    let child_run_id: string | null = null;
+    if (run.auto_mode && run.status === "completed") {
+      const child = await queryOne<{ id: string }>(
+        "SELECT id FROM pipeline_runs WHERE parent_run_id = $1 ORDER BY created_at DESC LIMIT 1",
+        [runId]
+      );
+      child_run_id = child?.id ?? null;
+    }
+
+    return NextResponse.json({ run, child_run_id });
   } catch (err) {
     console.error("[GET /api/run-status]", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
