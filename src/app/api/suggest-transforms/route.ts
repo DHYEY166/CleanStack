@@ -126,60 +126,115 @@ export async function POST(req: NextRequest) {
 
   // Document mode — separate prompt + schema
   if (run.mode === "document") {
-    const docProfile = profile.column_stats as unknown as {
+    const dp = profile.column_stats as unknown as {
       word_count?: number; char_count?: number; blank_line_count?: number;
+      avg_line_length?: number; short_line_pct?: number;
       pii_detected?: { emails: number; phones: number; ssns: number; credit_cards: number };
-      html_tag_count?: number; sample_text?: string;
+      html_tag_count?: number;
+      repeated_line_count?: number; repeated_line_examples?: Record<string, number>;
+      encoding_error_count?: number; encoding_error_examples?: string[];
+      person_name_count?: number; person_name_examples?: string[];
+      org_count?: number; org_examples?: string[];
+      inferred_domain?: string; domain_confidence?: number;
+      sample_text?: string; mid_sample_text?: string;
     } | null;
 
-    const docPrompt = `You are an expert document quality engineer. Analyze this document profile and suggest cleaning rules to improve quality and compliance.
+    const pii = dp?.pii_detected;
+    const repeatedEx = dp?.repeated_line_examples
+      ? Object.entries(dp.repeated_line_examples).map(([l,c]) => `"${l}" (×${c})`).join(", ")
+      : "none";
 
-DOCUMENT PROFILE:
-- Quality score: ${profile.quality_score}/100
-- Total lines: ${profile.total_rows}
-- Word count: ${docProfile?.word_count ?? "unknown"}
-- Character count: ${docProfile?.char_count ?? "unknown"}
-- Blank lines: ${docProfile?.blank_line_count ?? 0}
-- PII detected: ${docProfile?.pii_detected?.emails ?? 0} emails, ${docProfile?.pii_detected?.phones ?? 0} phones, ${docProfile?.pii_detected?.ssns ?? 0} SSNs, ${docProfile?.pii_detected?.credit_cards ?? 0} credit cards
-- HTML tags found: ${docProfile?.html_tag_count ?? 0}
+    const docPrompt = `You are an expert document quality engineer. Analyze the detailed document profile below and suggest precise cleaning rules.
 
-SAMPLE TEXT (first 500 chars):
-${docProfile?.sample_text ?? "(no sample)"}
+═══════════════════════════════════
+DOCUMENT PROFILE
+═══════════════════════════════════
 
----
+DOMAIN & OVERVIEW
+  Inferred domain : ${dp?.inferred_domain ?? "general"} (confidence: ${dp?.domain_confidence ?? 0} keyword matches)
+  Quality score   : ${profile.quality_score}/100
+  Total lines     : ${profile.total_rows}
+  Words           : ${dp?.word_count ?? "?"}
+  Characters      : ${dp?.char_count ?? "?"}
 
-Suggest 3-6 document cleaning rules. Only suggest rules for issues actually present. Each rule_type must appear AT MOST ONCE in your output — no duplicates.
+STRUCTURE
+  Avg line length : ${dp?.avg_line_length ?? "?"} chars
+  Short lines (<40 chars) : ${dp?.short_line_pct ?? 0}% of non-blank lines
+  Blank lines     : ${dp?.blank_line_count ?? 0} (${Math.round(((dp?.blank_line_count ?? 0) / Math.max(profile.total_rows ?? 1, 1)) * 100)}% of total)
 
-Available rule types (each can only be used once):
+PII & SENSITIVE DATA
+  Emails          : ${pii?.emails ?? 0}
+  Phones          : ${pii?.phones ?? 0}
+  SSNs            : ${pii?.ssns ?? 0}
+  Credit cards    : ${pii?.credit_cards ?? 0}
+  Person names detected : ${dp?.person_name_count ?? 0} unique${dp?.person_name_examples?.length ? ` — e.g. ${dp.person_name_examples.slice(0,3).join(", ")}` : ""}
+  Organizations detected: ${dp?.org_count ?? 0}${dp?.org_examples?.length ? ` — e.g. ${dp.org_examples.slice(0,2).join(", ")}` : ""}
 
-strip_pii — redacts emails, phones, SSNs, credit cards via regex
-  Use when: any PII count > 0. Covers regex-detectable PII in one rule.
+STRUCTURE ISSUES
+  HTML tags                 : ${dp?.html_tag_count ?? 0}
+  Repeated lines (headers/footers): ${dp?.repeated_line_count ?? 0} unique patterns
+    Examples: ${repeatedEx}
+  Encoding errors           : ${dp?.encoding_error_count ?? 0}${dp?.encoding_error_examples?.length ? ` — chars: ${dp.encoding_error_examples.join(" ")}` : ""}
 
-ner_redact — redacts named entities: PERSON (names), ORG (companies), GPE (addresses/locations), DATE, IP
-  Use when: document contains person names, company names, street addresses, or dates that strip_pii doesn't catch.
-  parameters: {"entities": ["PERSON","ORG","GPE","DATE"], "replacement": "[REDACTED]"}
+═══════════════════════════════════
+TEXT SAMPLES
+═══════════════════════════════════
 
-normalize_whitespace — normalises spaces, tabs, and excessive newlines
-  Use when: sample text shows inconsistent spacing
+[START OF DOCUMENT — first 2000 chars]
+${dp?.sample_text ?? "(unavailable)"}
 
-strip_html — removes HTML tags and decodes entities
-  Use when: html_tag_count > 0
+[MID-DOCUMENT — 500 chars from middle]
+${dp?.mid_sample_text ?? "(unavailable)"}
 
-fix_encoding — fixes mojibake / garbled unicode characters
-  Use when: sample text contains characters like â€™, Ã©, etc.
+═══════════════════════════════════
+RULE SELECTION INSTRUCTIONS
+═══════════════════════════════════
 
-remove_blank_lines — removes empty lines
-  Use when: blank_line_count > total_lines * 0.15
+Work through each rule type below. For each, make an explicit YES/NO decision based on the profile data above. Only include YES rules in your output. Each rule_type must appear AT MOST ONCE.
 
-remove_headers_footers — removes repeated page headers/footers
-  Use when: document appears to be a PDF with repeated page text
+1. strip_pii
+   → YES if: emails > 0 OR phones > 0 OR ssns > 0 OR credit_cards > 0
+   → parameters: {}
 
-redact_pattern — redacts ONE specific domain pattern not covered by strip_pii (e.g. contract numbers, employee IDs)
-  Use when: sample shows a non-PII sensitive pattern. Only include if strip_pii does NOT already cover it.
+2. ner_redact
+   → YES if: person_name_count > 3 OR org_count > 1 OR domain is medical/hr/legal/contract
+   → Select ONLY the entity types actually present:
+     PERSON  — if person_name_count > 3
+     ORG     — if org_count > 1
+     GPE     — if sample text shows street addresses or location references
+     DATE    — if sample text shows sensitive date-of-birth or personal dates
+     IP      — if sample text shows IP addresses
+   → parameters: {"entities": [...selected types...], "replacement": "[REDACTED]"}
 
-IMPORTANT: If you suggest strip_pii, do NOT add any redact_pattern for emails/phones/SSNs/credit cards — those are already handled. Use redact_pattern only for patterns like contract IDs or account numbers.
+3. remove_headers_footers
+   → YES if: repeated_line_count >= 2 AND examples show page numbers or document titles
+   → parameters: {}
 
-For each rule write ai_reasoning as one precise sentence referencing what was observed in the profile or sample.`;
+4. fix_encoding
+   → YES if: encoding_error_count > 0
+   → parameters: {}
+
+5. strip_html
+   → YES if: html_tag_count > 0
+   → parameters: {}
+
+6. remove_blank_lines
+   → YES if: blank lines > 15% of total lines
+   → parameters: {}
+
+7. normalize_whitespace
+   → YES if: avg_line_length is irregular OR sample text shows inconsistent spacing/tabs
+   → parameters: {}
+
+8. redact_pattern
+   → YES ONLY if: domain-specific sensitive pattern visible in sample (contract numbers, employee IDs, case numbers, medical record IDs) AND it is NOT already covered by strip_pii or ner_redact
+   → parameters: {"pattern": "<regex>", "replacement": "[REDACTED]"}
+
+IMPORTANT RULES:
+- If strip_pii is YES, do NOT add redact_pattern for emails/phones/SSNs/CC — already covered
+- If ner_redact is YES, do NOT add redact_pattern for names/addresses — already covered
+- Suggest 3–7 rules total
+- For each rule, write ai_reasoning as one precise sentence citing the specific profile numbers or sample text that triggered it`;
 
     let docOutput: { rules: Array<{ rule_type: string; column_name: null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
     try {
@@ -227,26 +282,7 @@ For each rule write ai_reasoning as one precise sentence referencing what was ob
 
   const columnStats = profile.column_stats ?? {};
   const sampleRows = buildSampleRows(columnStats);
-
-  const profileSummary = {
-    quality_score: profile.quality_score,
-    total_rows: profile.total_rows,
-    null_percentage: profile.null_percentage,
-    duplicate_percentage: profile.duplicate_percentage,
-    type_mismatch_count: profile.type_mismatch_count,
-    outlier_count: profile.outlier_count,
-    columns: Object.fromEntries(
-      Object.entries(columnStats).map(([col, stat]) => [
-        col,
-        {
-          type: stat.type,
-          null_pct: stat.null_pct,
-          unique_count: stat.unique_count,
-          sample_values: stat.sample_values?.slice(0, 5),
-        },
-      ])
-    ),
-  };
+  const columnSummary = buildColumnSummary(columnStats as Record<string, ColStat>);
 
   const prompt = `You are an expert data quality engineer at a top-tier data infrastructure company. Your job is to inspect a dataset profile and sample rows, identify every data quality problem present, and produce a precise ordered list of transform rules to fix them.
 
@@ -254,8 +290,18 @@ You must be thorough, specific, and correct. Do not guess — only flag issues t
 
 ---
 
-## DATASET PROFILE
-${JSON.stringify(profileSummary, null, 2)}
+## DATASET OVERVIEW
+- Quality score      : ${profile.quality_score}/100
+- Total rows         : ${profile.total_rows}
+- Null %             : ${profile.null_percentage}%
+- Duplicate %        : ${profile.duplicate_percentage}%
+- Type mismatches    : ${profile.type_mismatch_count} columns
+- Outliers           : ${profile.outlier_count} values
+- Sentinel values    : ${(profile as unknown as Record<string, number>).sentinel_pct_overall ?? "unknown"}% of string cells are sentinel strings (e.g. "N/A", "null", "unknown", "-")
+- Whitespace-padded cols: ${(profile as unknown as Record<string, number>).whitespace_padded_cols ?? 0}
+
+## COLUMN-BY-COLUMN PROFILE
+${columnSummary}
 
 ## SAMPLE ROWS (up to ${sampleRows.length} rows — treat these as representative)
 ${JSON.stringify(sampleRows, null, 2)}
@@ -278,8 +324,12 @@ For every column in the profile, work through ALL of the following checks. Do no
     - Numeric column → fill_nulls with strategy "mean" or "median"
     - Categorical column → fill_nulls with strategy "value" and pick a domain-appropriate default (e.g. "Unknown", "Uncategorized", "N/A", 0)
     - Date column → fill_nulls with strategy "value", value "1970-01-01"
-- Sample values contain literal strings "nan", "none", "null", "NULL", "N/A", "n/a", "NA", "", "-", "?" that represent missing data?
-  → These are NOT real values. Apply trim_whitespace first, then fill_nulls or filter notnull depending on severity.
+- sentinel_count > 0 or sentinel_examples show strings like "N/A", "null", "unknown", "-", "?", "0", "none"?
+  → These are FAKE non-nulls — they look non-null but carry no real value. Treat them as missing.
+  → If true_null_pct > 20%: use fill_nulls or drop_nulls on that column (same logic as real nulls above)
+  → true_null_pct = null_pct + sentinel_pct. Always use true_null_pct for severity assessment, NOT null_pct alone.
+- whitespace_padded_count > 0?
+  → Values have leading/trailing spaces. Always suggest trim_whitespace for that column (or globally).
 
 ### C. Duplicate Rows
 - duplicate_percentage > 0?
@@ -303,6 +353,8 @@ For every column in the profile, work through ALL of the following checks. Do no
   "2024-01-15", "01/15/2024", "Jan 15 2024", "15-01-2024", "January 15, 2024", "Jan-15-2024", "2024/01/15"
   → normalize on that column (the executor will parse mixed formats and output YYYY-MM-DD)
 - Even if null_pct is 0, if date formats differ between rows → normalize
+- distinct_pattern_count > 1 on a date/phone/ID column confirms format inconsistency → normalize
+- string_patterns showing e.g. "NNN-NNNN"×12, "(NNN) NNNN"×9 → 2 phone formats → normalize
 
 ### F. Case Inconsistency in Categorical Columns
 - Sample values for a categorical column show mixed casing: "ACTIVE", "active", "Active", "SHIPPED", "shipped", "Shipped"?
@@ -485,19 +537,62 @@ function buildSampleRows(
 ): Record<string, unknown>[] {
   const columns = Object.keys(columnStats);
   if (!columns.length) return [];
-
-  const maxSamples = Math.max(
-    ...columns.map((c) => columnStats[c].sample_values?.length ?? 0)
-  );
+  const maxSamples = Math.max(...columns.map((c) => columnStats[c].sample_values?.length ?? 0));
   const rows: Record<string, unknown>[] = [];
-
   for (let i = 0; i < Math.min(maxSamples, 20); i++) {
     const row: Record<string, unknown> = {};
-    for (const col of columns) {
-      row[col] = columnStats[col].sample_values?.[i] ?? null;
-    }
+    for (const col of columns) row[col] = columnStats[col].sample_values?.[i] ?? null;
     rows.push(row);
   }
-
   return rows;
+}
+
+type ColStat = {
+  type?: string;
+  null_count?: number;
+  null_pct?: number;
+  true_null_pct?: number;
+  sentinel_count?: number;
+  sentinel_pct?: number;
+  sentinel_examples?: string[];
+  unique_count?: number;
+  whitespace_padded_count?: number;
+  distinct_pattern_count?: number;
+  string_patterns?: Record<string, number>;
+  value_counts?: Record<string, number>;
+  min?: number;
+  max?: number;
+  outlier_examples?: number[];
+  sample_values?: unknown[];
+};
+
+function buildColumnSummary(columnStats: Record<string, ColStat>): string {
+  return Object.entries(columnStats).map(([col, s]) => {
+    const lines: string[] = [`Column: "${col}"`];
+    lines.push(`  type: ${s.type ?? "?"} | unique: ${s.unique_count ?? "?"} | null%: ${s.null_pct ?? 0}%` +
+      (s.true_null_pct != null && s.true_null_pct !== s.null_pct
+        ? ` | TRUE null% (incl. sentinels): ${s.true_null_pct}%`
+        : ""));
+
+    if ((s.sentinel_count ?? 0) > 0) {
+      lines.push(`  ⚠ Sentinel values: ${s.sentinel_count} (${s.sentinel_pct}%) — found: ${(s.sentinel_examples ?? []).join(", ")}`);
+    }
+    if ((s.whitespace_padded_count ?? 0) > 0) {
+      lines.push(`  ⚠ Whitespace-padded values: ${s.whitespace_padded_count}`);
+    }
+    if (s.min != null) {
+      lines.push(`  range: [${s.min}, ${s.max}]` +
+        ((s.outlier_examples?.length ?? 0) > 0 ? ` | outlier examples: ${s.outlier_examples!.join(", ")}` : ""));
+    }
+    if (s.distinct_pattern_count != null && s.distinct_pattern_count > 1 && s.string_patterns) {
+      const patterns = Object.entries(s.string_patterns).map(([p, c]) => `"${p}"×${c}`).join(", ");
+      lines.push(`  ⚠ ${s.distinct_pattern_count} distinct string patterns: ${patterns}`);
+    }
+    if (s.value_counts) {
+      const vc = Object.entries(s.value_counts).map(([v, c]) => `"${v}"(${c})`).join(", ");
+      lines.push(`  value distribution: ${vc}`);
+    }
+    lines.push(`  samples: ${(s.sample_values ?? []).slice(0, 10).map(v => JSON.stringify(v)).join(", ")}`);
+    return lines.join("\n");
+  }).join("\n\n");
 }
