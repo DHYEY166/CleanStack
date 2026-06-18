@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText, Output } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 import { z } from "zod";
 import { queryOne, query } from "@/lib/db";
 import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@/lib/types";
@@ -278,7 +278,7 @@ IMPORTANT RULES:
     );
     if (run.auto_mode) {
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-      fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
+      await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
         method: "POST",
         headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
       }).catch(console.error);
@@ -534,7 +534,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
 
   if (run.auto_mode) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-    fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
+    await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
       method: "POST",
       headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
     }).catch(console.error);
