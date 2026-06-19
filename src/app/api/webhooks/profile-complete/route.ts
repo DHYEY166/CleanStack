@@ -25,14 +25,18 @@ export async function POST(req: NextRequest) {
   );
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? `https://${req.headers.get("host")}`;
-  fetch(`${baseUrl}/api/suggest-transforms`, {
+  const res = await fetch(`${baseUrl}/api/suggest-transforms`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "",
     },
     body: JSON.stringify({ run_id }),
-  }).catch(console.error);
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    console.error(`[profile-complete] suggest-transforms ${res.status}: ${errBody}`);
+  }
 
   return NextResponse.json({ ok: true });
 }
