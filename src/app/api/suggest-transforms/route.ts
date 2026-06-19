@@ -298,9 +298,21 @@ IMPORTANT RULES:
   const sampleRows = buildSampleRows(columnStats);
   const columnSummary = buildColumnSummary(columnStats as Record<string, ColStat>);
 
+  const isSubsequentPass = (run.iteration ?? 1) > 1;
+
   const prompt = `You are an expert data quality engineer at a top-tier data infrastructure company. Your job is to inspect a dataset profile and sample rows, identify every data quality problem present, and produce a precise ordered list of transform rules to fix them.
 
 You must be thorough, specific, and correct. Do not guess — only flag issues that are actually visible in the profile stats or sample values.
+${isSubsequentPass ? `
+⚠️ PASS ${run.iteration} CONSTRAINTS — THIS DATA HAS ALREADY BEEN CLEANED IN PASS 1:
+- NEVER suggest drop_nulls. Remaining nulls in optional columns (notes, phone, discount_pct, etc.) are expected and acceptable.
+- NEVER suggest deduplicate. Duplicates were already removed in pass 1.
+- NEVER suggest fill_nulls unless null_pct > 80% AND the column is a critical identifier.
+- NEVER suggest filter rules that remove rows based on null checks.
+- ONLY suggest: normalize (date/case), type_cast, rename, trim_whitespace (if new whitespace found), semantic_deduplicate (only on free-text columns with near-duplicate content).
+- Focus exclusively on FORMAT inconsistencies and TYPE correctness. Row count must not decrease by more than 5%.
+- If you cannot find meaningful format/type issues, output 1–2 normalize rules maximum. Do NOT invent problems.
+` : ``}
 
 ---
 
