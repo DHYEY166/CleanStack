@@ -1,8 +1,9 @@
-import { auth } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { queryOne } from "@/lib/db";
+import { checkQuota } from "@/lib/billing";
 import type { PipelineRun } from "@/lib/types";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
@@ -16,6 +17,19 @@ const ALLOWED_EXTENSIONS = new Set([
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const user = await currentUser();
+  const email = user?.primaryEmailAddress?.emailAddress ?? null;
+
+  const quota = await checkQuota(userId, email);
+  if (quota.blocked) {
+    return NextResponse.json(
+      {
+        error: `Monthly row limit reached (${quota.used.toLocaleString()} / ${quota.includedRows.toLocaleString()} rows on ${quota.plan} plan). Upgrade at /pricing to continue.`,
+      },
+      { status: 402 }
+    );
+  }
 
   const body = await req.json();
   const { pipeline_id, filename, content_type } = body;

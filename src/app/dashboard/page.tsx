@@ -3,6 +3,7 @@ import Link from "next/link";
 import { query } from "@/lib/db";
 import type { Pipeline, PipelineRun } from "@/lib/types";
 import DeletePipelineButton from "@/components/DeletePipelineButton";
+import UsageMeter from "@/components/UsageMeter";
 
 async function getPipelines(teamId: string): Promise<Pipeline[]> {
   try {
@@ -66,6 +67,9 @@ export default async function DashboardPage() {
           + New Pipeline
         </Link>
       </div>
+
+      {/* Usage meter */}
+      <UsageMeter />
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">

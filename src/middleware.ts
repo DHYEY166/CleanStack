@@ -11,6 +11,7 @@ const isProtectedRoute = createRouteMatcher([
   "/api/chat-builder(.*)",
   "/api/download(.*)",
   "/api/pipelines(.*)",
+  "/api/usage(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

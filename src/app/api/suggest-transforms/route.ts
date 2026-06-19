@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText, Output } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { getSubscription, getMonthlyUsage, PLANS, type PlanId } from "@/lib/billing";
 
 export const maxDuration = 300;
 import { z } from "zod";
@@ -75,6 +76,29 @@ export async function POST(req: NextRequest) {
   );
   if (!claimed) {
     return NextResponse.json({ ok: true, skipped: true, reason: "already claimed" });
+  }
+
+  // AI-spend guard for pass 1 only — prevent Bedrock cost if Free-tier quota exceeded
+  if ((run.iteration ?? 1) === 1) {
+    const pipelineRow = await queryOne<{ team_id: string }>(
+      "SELECT team_id FROM pipelines WHERE id = $1",
+      [run.pipeline_id]
+    );
+    if (pipelineRow) {
+      const sub = await getSubscription(pipelineRow.team_id);
+      const planId: PlanId = (sub?.plan as PlanId) ?? "free";
+      const planConfig = PLANS[planId];
+      if (planConfig.hardCap) {
+        const used = await getMonthlyUsage(pipelineRow.team_id);
+        if (used >= planConfig.includedRows) {
+          await queryOne(
+            "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+            [run_id, `Monthly row limit reached (${used.toLocaleString()} / ${planConfig.includedRows.toLocaleString()} rows on ${planId} plan). Upgrade to continue.`]
+          );
+          return NextResponse.json({ error: "Quota exceeded" }, { status: 402 });
+        }
+      }
+    }
   }
 
   // Short-circuit: if pipeline was created from a template, use its rules directly

@@ -109,3 +109,18 @@ export interface ApprovalReview {
   rule_changes: Record<string, unknown> | null;
   reviewed_at: string;
 }
+
+export type PlanId = "free" | "pro" | "team";
+
+export interface Subscription {
+  id: string;
+  team_id: string;
+  plan: PlanId;
+  status: string;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  current_period_start: string;
+  current_period_end: string | null;
+  created_at: string;
+  updated_at: string;
+}

@@ -110,9 +110,24 @@ CREATE TABLE IF NOT EXISTS pipeline_destinations (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Subscriptions (row-based metered billing)
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id TEXT NOT NULL UNIQUE,
+  plan TEXT NOT NULL DEFAULT 'free',
+  status TEXT NOT NULL DEFAULT 'active',
+  stripe_customer_id TEXT,
+  stripe_subscription_id TEXT,
+  current_period_start TIMESTAMPTZ NOT NULL DEFAULT date_trunc('month', now()),
+  current_period_end TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_pipelines_team_id ON pipelines(team_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status);
 CREATE INDEX IF NOT EXISTS idx_transform_rules_run_id ON transform_rules(run_id);
 CREATE INDEX IF NOT EXISTS idx_data_profiles_run_id ON data_profiles(run_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_team_id ON subscriptions(team_id);
