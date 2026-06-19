@@ -410,7 +410,7 @@ def handler(event, context):
             f"{app_url}/api/webhooks/profile-complete",
             json={"run_id": run_id},
             headers={"x-webhook-secret": webhook_secret},
-            timeout=10,
+            timeout=300,
         )
 
     except Exception as e:
