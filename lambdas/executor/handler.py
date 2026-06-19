@@ -24,6 +24,16 @@ class _NpEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray): return obj.tolist()
         return super().default(obj)
 
+def _sanitize_nan(obj):
+    """Recursively replace float NaN/Inf with None so PostgreSQL JSON accepts it."""
+    if isinstance(obj, float) and (obj != obj or obj == float('inf') or obj == float('-inf')):
+        return None
+    if isinstance(obj, dict):
+        return {k: _sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_nan(v) for v in obj]
+    return obj
+
 
 def save_dataframe(df: pd.DataFrame, fmt: str) -> tuple[bytes, str, str]:
     """Return (file_bytes, content_type, extension) in native format."""
@@ -779,7 +789,7 @@ def handler(event, context):
                 float(profile["duplicate_percentage"]),
                 int(profile["type_mismatch_count"]),
                 int(profile["outlier_count"]),
-                json.dumps(profile["column_stats"], cls=_NpEncoder),
+                json.dumps(_sanitize_nan(profile["column_stats"]), cls=_NpEncoder),
             ),
         )
 
