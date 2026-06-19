@@ -9,15 +9,18 @@ const tiers = [
     cta: "Start for free",
     ctaHref: "/sign-up",
     highlighted: false,
+    included: "50,000 rows / month included",
+    overage: null,
     features: [
+      "50,000 rows / month (hard cap)",
       "5 pipeline runs / month",
-      "Up to 10,000 rows per run",
       "CSV, JSON, Excel formats",
       "AI quality profiling",
       "Community templates",
       "1 user",
     ],
     missing: [
+      "Row overage",
       "Schema drift alerts",
       "Slack / email notifications",
       "API access",
@@ -33,10 +36,13 @@ const tiers = [
     cta: "Start Pro trial",
     ctaHref: "/sign-up",
     highlighted: true,
+    included: "1,000,000 rows / month included",
+    overage: "$0.50 per 100K rows after that",
     features: [
+      "1,000,000 rows / month included",
+      "$0.50 per 100K rows overage",
       "Unlimited pipeline runs",
-      "Up to 1,000,000 rows per run",
-      "All 7 formats (PDF, images, Parquet…)",
+      "All 7 formats (PDF, DOCX, Parquet…)",
       "AI quality profiling + transform rules",
       "Full template marketplace",
       "Schema drift alerts",
@@ -51,15 +57,18 @@ const tiers = [
   },
   {
     name: "Team",
-    price: "$149",
+    price: "$199",
     period: "per month",
-    description: "For data teams who run pipelines in production.",
+    description: "For data teams running GB-scale pipelines in production.",
     cta: "Contact sales",
     ctaHref: "mailto:dvdesai06@gmail.com",
     highlighted: false,
+    included: "10,000,000 rows / month included",
+    overage: "$0.30 per 100K rows after that",
     features: [
-      "Everything in Pro",
-      "Unlimited rows",
+      "10,000,000 rows / month included",
+      "$0.30 per 100K rows overage",
+      "Unlimited pipeline runs",
       "REST API access",
       "Custom output destinations (S3, webhooks)",
       "Audit log export",
@@ -74,12 +83,20 @@ const tiers = [
 
 const faqs = [
   {
+    q: "How does row-based billing work?",
+    a: "Each plan includes a monthly row quota. Rows are counted from the raw input file per pipeline run. If you stay within your quota, you pay only the base fee. If you exceed it, overage is billed at the per-100K rate shown on your plan — automatically calculated at the end of each billing cycle via Stripe.",
+  },
+  {
     q: "What counts as a pipeline run?",
-    a: "One file upload = one run. Profiling, AI suggestions, and transform execution are all included in that single run.",
+    a: "One file upload = one run. Profiling, AI suggestions, transform execution, and all auto-clean passes are included in the row count for that run.",
+  },
+  {
+    q: "Will I get a surprise bill?",
+    a: "Free plan has a hard row cap — no overage, no surprises. Pro and Team plans show a real-time usage meter in your dashboard. You can set a spend cap to automatically pause processing when you hit a limit.",
   },
   {
     q: "Which AWS services does CleanStack use under the hood?",
-    a: "S3 for raw and processed file storage, Lambda for profiling and transform execution, SQS for queueing, SNS for drift alerts, and Aurora PostgreSQL for all metadata. All costs are bundled into your CleanStack subscription.",
+    a: "S3 for raw and processed file storage, Lambda for profiling and transform execution, SQS for queueing, SNS for drift alerts, and Aurora PostgreSQL for all metadata. All infrastructure costs are bundled into your CleanStack subscription.",
   },
   {
     q: "Can I use my own AWS account?",
@@ -149,7 +166,19 @@ export default function PricingPage() {
                   <span className="text-4xl font-bold text-white">{tier.price}</span>
                   <span className="text-gray-500 text-sm pb-1">{tier.period}</span>
                 </div>
-                <p className="text-gray-400 text-sm">{tier.description}</p>
+                <p className="text-gray-400 text-sm mb-3">{tier.description}</p>
+                {tier.overage && (
+                  <div className="bg-gray-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                    <p className="text-xs text-gray-300 font-medium">{tier.included}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{tier.overage}</p>
+                  </div>
+                )}
+                {!tier.overage && tier.included && (
+                  <div className="bg-gray-800/60 border border-gray-700 rounded-lg px-3 py-2">
+                    <p className="text-xs text-gray-300 font-medium">{tier.included}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">Hard cap — no surprise bills</p>
+                  </div>
+                )}
               </div>
 
               <Link
@@ -198,11 +227,13 @@ export default function PricingPage() {
               </thead>
               <tbody className="divide-y divide-gray-800/50">
                 {[
+                  ["Included rows / month", "50,000", "1,000,000", "10,000,000"],
+                  ["Overage rate", "Not available", "$0.50 / 100K rows", "$0.30 / 100K rows"],
                   ["Pipeline runs / month", "5", "Unlimited", "Unlimited"],
-                  ["Max rows per run", "10,000", "1,000,000", "Unlimited"],
                   ["File formats", "CSV, JSON, Excel", "All 7 formats", "All 7 formats"],
                   ["AI quality profiling", "✓", "✓", "✓"],
                   ["AI transform suggestions", "✓", "✓", "✓"],
+                  ["Multi-pass auto-clean", "✓", "✓", "✓"],
                   ["Data PR approval UI", "✓", "✓", "✓"],
                   ["Template marketplace", "Community", "Full access", "Full access"],
                   ["Schema drift alerts", "—", "✓", "✓"],

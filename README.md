@@ -222,11 +222,14 @@ aws lambda update-function-code --function-name cleanstack-executor --zip-file f
 
 ## Pricing
 
-| Plan | Price | Rows/month | Pipelines |
-|------|-------|------------|-----------|
-| Free | $0 | 10,000 | 3 |
-| Pro | $49/mo | 1,000,000 | Unlimited |
-| Enterprise | $299/mo | Unlimited | Unlimited + SSO + SLA |
+Row-based metered billing — pay a base fee, included rows bundled, overage charged per 100K rows.
+
+| Plan | Base fee | Included rows/mo | Overage |
+|------|----------|-----------------|---------|
+| Free | $0 | 50,000 (hard cap) | Not available |
+| Pro | $49/mo | 1,000,000 | $0.50 per 100K rows |
+| Team | $199/mo | 10,000,000 | $0.30 per 100K rows |
+| Enterprise | Custom | Unlimited | Custom |
 
 ---
 
