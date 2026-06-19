@@ -231,6 +231,11 @@ export default function PipelineChat({ onApply }: PipelineChatProps) {
             </button>
           </div>
 
+          {/* Pipeline behaviour note */}
+          <p className="text-gray-500 text-xs">
+            After upload, CleanStack&apos;s AI re-analyzes your actual file and an AI committee reviews each rule — up to 3 automated passes. These rules are a preview.
+          </p>
+
           {/* Generate sample data */}
           <div className="border-t border-indigo-500/20 pt-3">
             <p className="text-gray-400 text-xs mb-2">
