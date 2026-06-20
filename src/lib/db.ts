@@ -18,7 +18,7 @@ const CLUSTER_ARN =
 
 const SECRET_ARN =
   process.env.AURORA_SECRET_ARN ||
-  "arn:aws:secretsmanager:us-east-1:989088054490:secret:cleanstack/aurora/master-lYqDgp";
+  "arn:aws:secretsmanager:us-east-1:989088054490:secret:cleanstack-db-master-VhiPpa";
 
 const DATABASE = "cleanstack";
 
