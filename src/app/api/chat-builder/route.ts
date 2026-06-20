@@ -1,5 +1,8 @@
 import { convertToModelMessages, streamText, UIMessage } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { auth } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
+import { chatLimiter, checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
 
@@ -42,6 +45,12 @@ If no column names are given, use realistic guesses based on the data type descr
 For document/contract/report data, use document rule types instead of tabular ones.`;
 
 export async function POST(req: Request) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rateLimitRes = await checkRateLimit(chatLimiter, userId);
+  if (rateLimitRes) return rateLimitRes;
+
   const { messages }: { messages: UIMessage[] } = await req.json();
 
   const result = streamText({

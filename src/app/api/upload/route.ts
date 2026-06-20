@@ -4,6 +4,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import { getCachedQuota } from "@/lib/quota-cache";
+import { uploadLimiter, checkRateLimit } from "@/lib/rate-limit";
 import type { PipelineRun } from "@/lib/types";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
@@ -17,6 +18,9 @@ const ALLOWED_EXTENSIONS = new Set([
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rateLimitRes = await checkRateLimit(uploadLimiter, userId);
+  if (rateLimitRes) return rateLimitRes;
 
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress ?? null;

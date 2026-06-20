@@ -685,16 +685,22 @@ def handler(event, context):
         )
         conn.commit()
 
-        # Fetch run metadata
+        # Fetch run metadata + pipeline settings
         cur.execute(
-            "SELECT pipeline_id, raw_s3_key, file_format, mode, iteration, parent_run_id, auto_mode, row_count_raw FROM pipeline_runs WHERE id = %s",
+            """SELECT pr.pipeline_id, pr.raw_s3_key, pr.file_format, pr.mode,
+                      pr.iteration, pr.parent_run_id, pr.auto_mode, pr.row_count_raw,
+                      p.auto_delete_raw
+               FROM pipeline_runs pr
+               JOIN pipelines p ON pr.pipeline_id = p.id
+               WHERE pr.id = %s""",
             (run_id,)
         )
         row = cur.fetchone()
-        pipeline_id, raw_s3_key, file_format, run_mode, iteration, parent_run_id, auto_mode, row_count_raw = row
+        pipeline_id, raw_s3_key, file_format, run_mode, iteration, parent_run_id, auto_mode, row_count_raw, auto_delete_raw = row
         run_mode = run_mode or "tabular"
         iteration = iteration or 1
         auto_mode = auto_mode or False
+        auto_delete_raw = auto_delete_raw if auto_delete_raw is not None else True
 
         # Fetch approved rules ordered by index
         cur.execute(
@@ -822,6 +828,15 @@ def handler(event, context):
             (processed_key, profile["total_rows"], run_id),
         )
         conn.commit()
+
+        # M7: Delete raw file after successful processing if auto_delete_raw=True
+        if auto_delete_raw:
+            try:
+                raw_bucket = os.environ["S3_RAW_BUCKET"]
+                s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
+                print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
+            except Exception as del_err:
+                print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
 
         # Schema drift detection — tabular only
         if run_mode == "document":
