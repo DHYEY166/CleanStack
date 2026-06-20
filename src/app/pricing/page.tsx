@@ -1,4 +1,11 @@
 import Link from "next/link";
+import {
+  Check as CheckIcon,
+  Minus,
+  GitPullRequestArrow,
+  ArrowRight,
+  Sparkles,
+} from "lucide-react";
 
 const tiers = [
   {
@@ -120,112 +127,136 @@ export default function PricingPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {/* Nav */}
-      <nav className="border-b border-gray-800 px-6 py-4 flex items-center justify-between max-w-6xl mx-auto">
-        <Link href="/" className="text-xl font-bold text-white">CleanStack</Link>
-        <div className="flex items-center gap-4">
-          <Link href="/templates" className="text-sm text-gray-400 hover:text-white transition-colors">Templates</Link>
-          <Link href="/sign-in" className="text-sm text-gray-400 hover:text-white transition-colors">Sign in</Link>
-          <Link href="/sign-up" className="text-sm bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg transition-colors">
-            Get started free
+      <nav className="sticky top-0 z-50 border-b border-gray-800/80 bg-gray-950/80 backdrop-blur-md">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link href="/" className="flex items-center gap-2 text-xl font-bold text-white tracking-tight">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
+              <GitPullRequestArrow className="h-4 w-4" />
+            </span>
+            CleanStack
           </Link>
+          <div className="flex items-center gap-6">
+            <Link href="/templates" className="hidden sm:block text-sm text-gray-400 hover:text-white transition-colors">Templates</Link>
+            <Link href="/sign-in" className="text-sm text-gray-400 hover:text-white transition-colors">Sign in</Link>
+            <Link href="/sign-up" className="text-sm bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium transition-colors">
+              Get started free
+            </Link>
+          </div>
         </div>
       </nav>
 
       <main className="max-w-6xl mx-auto px-6 py-20">
         {/* Header */}
         <div className="text-center mb-16">
-          <h1 className="text-4xl font-bold text-white mb-4">Simple, transparent pricing</h1>
-          <p className="text-gray-400 text-lg max-w-xl mx-auto">
+          <div className="inline-flex items-center gap-2 mb-6 px-3 py-1 rounded-full border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 text-sm font-medium">
+            <Sparkles className="h-3.5 w-3.5" />
+            Transparent, usage-based pricing
+          </div>
+          <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-white mb-4 text-balance">Simple, transparent pricing</h1>
+          <p className="text-gray-400 text-lg max-w-xl mx-auto leading-relaxed text-pretty">
             Under $5/month for typical SME workloads — vs $500+ for Fivetran or Talend.
             Start free, upgrade when you need more.
           </p>
         </div>
 
         {/* Tier cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-20">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-20 items-start">
           {tiers.map((tier) => (
             <div
               key={tier.name}
-              className={`rounded-2xl border p-8 flex flex-col ${
+              className={`relative rounded-2xl border flex flex-col transition-colors ${
                 tier.highlighted
-                  ? "border-indigo-500 bg-indigo-500/5 relative"
-                  : "border-gray-800 bg-gray-900"
+                  ? "border-indigo-500 bg-indigo-500/[0.07] shadow-2xl shadow-indigo-950/40 md:-mt-4 md:mb-4"
+                  : "border-gray-800 bg-gray-900/60 hover:border-gray-700"
               }`}
             >
               {tier.highlighted && (
-                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
-                  <span className="bg-indigo-600 text-white text-xs font-semibold px-3 py-1 rounded-full">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                  <span className="inline-flex items-center gap-1 bg-indigo-600 text-white text-xs font-semibold px-3 py-1 rounded-full shadow-lg shadow-indigo-600/30">
+                    <Sparkles className="h-3 w-3" />
                     Most popular
                   </span>
                 </div>
               )}
 
-              <div className="mb-6">
-                <div className="text-sm font-medium text-gray-400 mb-1">{tier.name}</div>
-                <div className="flex items-end gap-2 mb-2">
-                  <span className="text-4xl font-bold text-white">{tier.price}</span>
+              <div className="p-8 pb-0">
+                <div className="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">{tier.name}</div>
+                <div className="flex items-end gap-2 mb-3">
+                  <span className="text-4xl font-bold tracking-tight text-white">{tier.price}</span>
                   <span className="text-gray-500 text-sm pb-1">{tier.period}</span>
                 </div>
-                <p className="text-gray-400 text-sm mb-3">{tier.description}</p>
+                <p className="text-gray-400 text-sm leading-relaxed min-h-[40px]">{tier.description}</p>
+              </div>
+
+              <div className="px-8 pt-5">
                 {tier.overage && (
-                  <div className="bg-gray-800/60 border border-gray-700 rounded-lg px-3 py-2">
-                    <p className="text-xs text-gray-300 font-medium">{tier.included}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{tier.overage}</p>
+                  <div className="rounded-lg border border-gray-700/80 bg-gray-800/50 px-3 py-2.5">
+                    <p className="text-xs font-semibold text-gray-200">{tier.included}</p>
+                    <p className="text-xs text-gray-500 mt-1 pt-1 border-t border-gray-700/60">{tier.overage}</p>
                   </div>
                 )}
                 {!tier.overage && tier.included && (
-                  <div className="bg-gray-800/60 border border-gray-700 rounded-lg px-3 py-2">
-                    <p className="text-xs text-gray-300 font-medium">{tier.included}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">Hard cap — no surprise bills</p>
+                  <div className="rounded-lg border border-gray-700/80 bg-gray-800/50 px-3 py-2.5">
+                    <p className="text-xs font-semibold text-gray-200">{tier.included}</p>
+                    <p className="text-xs text-gray-500 mt-1 pt-1 border-t border-gray-700/60">Hard cap — no surprise bills</p>
                   </div>
                 )}
               </div>
 
-              <Link
-                href={tier.ctaHref}
-                className={`w-full text-center py-2.5 rounded-lg font-medium text-sm transition-colors mb-8 ${
-                  tier.highlighted
-                    ? "bg-indigo-600 hover:bg-indigo-500 text-white"
-                    : "border border-gray-700 hover:border-gray-500 text-gray-300 hover:text-white"
-                }`}
-              >
-                {tier.cta}
-              </Link>
+              <div className="px-8 pt-6">
+                <Link
+                  href={tier.ctaHref}
+                  className={`block w-full text-center py-2.5 rounded-lg font-medium text-sm transition-colors ${
+                    tier.highlighted
+                      ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm shadow-indigo-600/20"
+                      : "border border-gray-700 hover:border-gray-500 bg-gray-800/40 text-gray-200 hover:text-white"
+                  }`}
+                >
+                  {tier.cta}
+                </Link>
+              </div>
 
-              <ul className="space-y-3 flex-1">
-                {tier.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm">
-                    <Check />
-                    <span className="text-gray-300">{f}</span>
-                  </li>
-                ))}
-                {tier.missing.map((f) => (
-                  <li key={f} className="flex items-start gap-2.5 text-sm">
-                    <X />
-                    <span className="text-gray-600">{f}</span>
-                  </li>
-                ))}
-              </ul>
+              <div className="px-8 pt-7 pb-8 mt-6 border-t border-gray-800/80">
+                <ul className="space-y-3">
+                  {tier.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm">
+                      <CheckIcon className="h-4 w-4 mt-0.5 flex-shrink-0 text-green-400" aria-hidden="true" />
+                      <span className="text-gray-300">{f}</span>
+                    </li>
+                  ))}
+                  {tier.missing.map((f) => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm">
+                      <Minus className="h-4 w-4 mt-0.5 flex-shrink-0 text-gray-700" aria-hidden="true" />
+                      <span className="text-gray-600">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           ))}
         </div>
 
         {/* Feature comparison table */}
         <div className="mb-20">
-          <h2 className="text-2xl font-bold text-white text-center mb-8">Full comparison</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800">
-                  <th className="text-left text-gray-400 font-medium pb-4 pr-6 w-1/2">Feature</th>
+          <h2 className="text-2xl font-bold tracking-tight text-white text-center mb-8">Full comparison</h2>
+          <div className="overflow-x-auto rounded-2xl border border-gray-800">
+            <table className="w-full text-sm border-collapse">
+              <thead className="sticky top-[57px] z-10">
+                <tr className="bg-gray-900/95 backdrop-blur-sm">
+                  <th className="text-left text-gray-300 font-semibold py-4 px-5 w-2/5 border-b border-gray-800">Feature</th>
                   {tiers.map((t) => (
-                    <th key={t.name} className={`text-center pb-4 font-medium ${t.highlighted ? "text-indigo-400" : "text-gray-400"}`}>
+                    <th
+                      key={t.name}
+                      className={`text-center py-4 px-4 font-semibold border-b border-gray-800 ${
+                        t.highlighted ? "text-indigo-400 bg-indigo-500/[0.06]" : "text-gray-300"
+                      }`}
+                    >
                       {t.name}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-800/50">
+              <tbody>
                 {[
                   ["Included rows / month", "50,000", "1,000,000", "10,000,000"],
                   ["Overage rate", "Not available", "$0.50 / 100K rows", "$0.30 / 100K rows"],
@@ -244,14 +275,23 @@ export default function PricingPage() {
                   ["Audit log export", "—", "—", "✓"],
                   ["Users", "1", "3", "10"],
                   ["Support", "Community", "Email", "Priority (4h SLA)"],
-                ].map(([feature, free, pro, team]) => (
-                  <tr key={feature}>
-                    <td className="py-3 pr-6 text-gray-400">{feature}</td>
-                    <td className="py-3 text-center text-gray-300">{free}</td>
-                    <td className="py-3 text-center text-indigo-300">{pro}</td>
-                    <td className="py-3 text-center text-gray-300">{team}</td>
-                  </tr>
-                ))}
+                ].map(([feature, free, pro, team], i) => {
+                  const renderCell = (value: string) => {
+                    if (value === "✓")
+                      return <CheckIcon className="h-4 w-4 mx-auto text-green-400" aria-label="Included" />;
+                    if (value === "—")
+                      return <Minus className="h-4 w-4 mx-auto text-gray-700" aria-label="Not included" />;
+                    return value;
+                  };
+                  return (
+                    <tr key={feature} className={i % 2 === 1 ? "bg-gray-900/40" : ""}>
+                      <td className="py-3 px-5 text-gray-300 font-medium">{feature}</td>
+                      <td className="py-3 px-4 text-center text-gray-400">{renderCell(free)}</td>
+                      <td className="py-3 px-4 text-center text-indigo-200 bg-indigo-500/[0.04]">{renderCell(pro)}</td>
+                      <td className="py-3 px-4 text-center text-gray-400">{renderCell(team)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -259,11 +299,14 @@ export default function PricingPage() {
 
         {/* FAQ */}
         <div className="max-w-2xl mx-auto mb-20">
-          <h2 className="text-2xl font-bold text-white text-center mb-8">Frequently asked questions</h2>
-          <div className="space-y-6">
+          <h2 className="text-2xl font-bold tracking-tight text-white text-center mb-8">Frequently asked questions</h2>
+          <div className="space-y-3">
             {faqs.map(({ q, a }) => (
-              <div key={q}>
-                <div className="text-white font-medium mb-1">{q}</div>
+              <div
+                key={q}
+                className="rounded-xl border border-gray-800 bg-gray-900/50 p-5 transition-colors hover:border-gray-700"
+              >
+                <div className="text-white font-semibold mb-2">{q}</div>
                 <div className="text-gray-400 text-sm leading-relaxed">{a}</div>
               </div>
             ))}
@@ -271,14 +314,15 @@ export default function PricingPage() {
         </div>
 
         {/* CTA banner */}
-        <div className="bg-indigo-600/10 border border-indigo-500/30 rounded-2xl p-10 text-center">
-          <h2 className="text-2xl font-bold text-white mb-3">Start cleaning data today</h2>
-          <p className="text-gray-400 mb-6">No credit card required. 5 free pipeline runs every month.</p>
+        <div className="relative overflow-hidden rounded-2xl border border-indigo-500/30 bg-gradient-to-b from-indigo-600/15 to-gray-900/20 p-10 text-center">
+          <h2 className="text-3xl font-bold tracking-tight text-white mb-3 text-balance">Start cleaning data today</h2>
+          <p className="text-gray-400 mb-8 text-pretty">No credit card required. 5 free pipeline runs every month.</p>
           <Link
             href="/sign-up"
-            className="inline-block bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-lg font-medium transition-colors"
+            className="group inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-lg font-medium transition-colors"
           >
-            Get started free →
+            Get started free
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Link>
         </div>
       </main>
