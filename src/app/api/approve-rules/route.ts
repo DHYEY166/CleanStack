@@ -24,6 +24,15 @@ export async function POST(req: NextRequest) {
   if (!run_id || !Array.isArray(rule_decisions)) {
     return NextResponse.json({ error: "run_id and rule_decisions required" }, { status: 400 });
   }
+  if (rule_decisions.length > 100) {
+    return NextResponse.json({ error: "Too many rule decisions (max 100)" }, { status: 400 });
+  }
+  const invalidDecision = rule_decisions.find(
+    (d) => typeof d.rule_id !== "string" || !["approved", "rejected"].includes(d.action)
+  );
+  if (invalidDecision) {
+    return NextResponse.json({ error: "Invalid rule_decision: rule_id must be string, action must be approved|rejected" }, { status: 400 });
+  }
 
   try {
     const run = await queryOneWithTeam<{ id: string; pipeline_id: string; status: string }>(

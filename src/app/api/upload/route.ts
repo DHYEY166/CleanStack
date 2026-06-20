@@ -15,6 +15,20 @@ const ALLOWED_EXTENSIONS = new Set([
   "pdf", "docx",
 ]);
 
+const EXT_CONTENT_TYPES: Record<string, string> = {
+  csv: "text/csv",
+  tsv: "text/tab-separated-values",
+  txt: "text/plain",
+  json: "application/json",
+  jsonl: "application/jsonlines",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  xml: "application/xml",
+  parquet: "application/octet-stream",
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+};
+
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,16 +50,19 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { pipeline_id, filename, content_type } = body;
+  const { pipeline_id, filename } = body;
 
-  if (!pipeline_id || !filename || !content_type) {
-    return NextResponse.json({ error: "pipeline_id, filename, content_type required" }, { status: 400 });
+  if (!pipeline_id || !filename) {
+    return NextResponse.json({ error: "pipeline_id and filename required" }, { status: 400 });
   }
 
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 400 });
   }
+
+  // Derive content_type server-side — never trust client-supplied value
+  const content_type = EXT_CONTENT_TYPES[ext] ?? "application/octet-stream";
 
   try {
     const pipeline = await queryOneWithTeam<{ id: string }>(

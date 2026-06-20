@@ -9,6 +9,7 @@ function safeCompare(a: string, b: string): boolean {
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { getSubscription, getMonthlyUsage, PLANS, type PlanId } from "@/lib/billing";
 import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
+import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 300;
 import { z } from "zod";
@@ -84,6 +85,14 @@ export async function POST(req: NextRequest) {
   );
   if (!claimed) {
     return NextResponse.json({ ok: true, skipped: true, reason: "already claimed" });
+  }
+
+  // Per-team AI rate limit (50 calls/hr) — prevents burst from queued SQS messages
+  const rateLimitRes = await checkRateLimit(aiLimiter, `ai:${run.team_id}`);
+  if (rateLimitRes) {
+    await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      [run_id, "AI rate limit exceeded (50/hr per team). Retry later."]);
+    return rateLimitRes;
   }
 
   // AI-spend guard for pass 1 only — prevent Bedrock cost if Free-tier quota exceeded
