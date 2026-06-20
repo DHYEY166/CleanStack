@@ -16,6 +16,8 @@ const sqs = new SQSClient({ region: process.env.AWS_REGION || "us-east-1" });
 
 export const maxDuration = 300;
 
+const TERMINAL_STATUSES = new Set(["completed", "failed", "awaiting_approval", "queued", "running"]);
+
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-webhook-secret");
   if (!safeCompare(secret ?? "", process.env.WEBHOOK_SECRET ?? "")) {
@@ -26,8 +28,6 @@ export async function POST(req: NextRequest) {
   const { run_id } = body;
 
   if (!run_id) return NextResponse.json({ error: "run_id required" }, { status: 400 });
-
-  const TERMINAL_STATUSES = new Set(["completed", "failed", "awaiting_approval", "queued", "running"]);
 
   const run = await queryOne<{ id: string; pipeline_id: string; raw_s3_key: string; status: string }>(
     "SELECT id, pipeline_id, raw_s3_key, status FROM pipeline_runs WHERE id = $1",
