@@ -1,6 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-import { queryOne } from "@/lib/db";
+import { queryOne, queryOneWithTeam } from "@/lib/db";
 
 export async function DELETE(
   _req: NextRequest,
@@ -12,7 +12,8 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    const pipeline = await queryOne<{ id: string }>(
+    const pipeline = await queryOneWithTeam<{ id: string }>(
+      userId,
       "SELECT id FROM pipelines WHERE id = $1 AND team_id = $2",
       [id, userId]
     );

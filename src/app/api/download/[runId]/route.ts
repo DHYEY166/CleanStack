@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
-import { queryOne } from "@/lib/db";
+import { queryOneWithTeam } from "@/lib/db";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
@@ -28,7 +28,8 @@ export async function GET(
   const { runId } = await params;
 
   try {
-    const run = await queryOne<{ processed_s3_key: string | null; file_format: string | null }>(
+    const run = await queryOneWithTeam<{ processed_s3_key: string | null; file_format: string | null }>(
+      userId,
       `SELECT pr.processed_s3_key, pr.file_format
        FROM pipeline_runs pr
        JOIN pipelines p ON pr.pipeline_id = p.id

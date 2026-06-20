@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, CopyObjectCommand } from "@aws-sdk/client-s3";
-import { queryOne } from "@/lib/db";
+import { queryOne, queryOneWithTeam } from "@/lib/db";
 import type { PipelineRun } from "@/lib/types";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
@@ -15,7 +15,8 @@ export async function POST(
 
   const { runId } = await params;
 
-  const run = await queryOne<PipelineRun>(
+  const run = await queryOneWithTeam<PipelineRun>(
+    userId,
     `SELECT pr.*
      FROM pipeline_runs pr
      JOIN pipelines p ON pr.pipeline_id = p.id

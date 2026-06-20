@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
-import { query, queryOne } from "@/lib/db";
+import { query, queryOne, queryOneWithTeam } from "@/lib/db";
 
 interface RuleDecision {
   rule_id: string;
@@ -26,7 +26,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const run = await queryOne<{ id: string; pipeline_id: string; status: string }>(
+    const run = await queryOneWithTeam<{ id: string; pipeline_id: string; status: string }>(
+      userId,
       `SELECT pr.id, pr.pipeline_id, pr.status
        FROM pipeline_runs pr
        JOIN pipelines p ON pr.pipeline_id = p.id

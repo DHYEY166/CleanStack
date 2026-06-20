@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { queryOne } from "@/lib/db";
+import { queryOne, queryOneWithTeam } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -12,7 +12,8 @@ export async function POST(req: NextRequest) {
   }
 
   // Verify ownership
-  const pipeline = await queryOne<{ id: string }>(
+  const pipeline = await queryOneWithTeam<{ id: string }>(
+    userId,
     "SELECT id FROM pipelines WHERE id = $1 AND team_id = $2",
     [pipeline_id, userId]
   );
