@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
 const isProtectedRoute = createRouteMatcher([
   "/dashboard(.*)",
@@ -16,9 +17,20 @@ const isProtectedRoute = createRouteMatcher([
   "/api/export-training(.*)",
 ]);
 
+const isRootPath = createRouteMatcher(["/"]);
+
 export default clerkMiddleware(async (auth, req) => {
   if (isProtectedRoute(req)) {
     await auth.protect();
+    return;
+  }
+
+  // Redirect authenticated users from landing page → dashboard
+  if (isRootPath(req)) {
+    const { userId } = await auth();
+    if (userId) {
+      return NextResponse.redirect(new URL("/dashboard", req.url));
+    }
   }
 });
 
