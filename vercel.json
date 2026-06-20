@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/reconcile-runs",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
+{}
