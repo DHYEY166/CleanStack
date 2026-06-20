@@ -1,6 +1,18 @@
 import { auth } from "@clerk/nextjs/server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import {
+  ChevronRight,
+  GitPullRequest,
+  Loader2,
+  AlertTriangle,
+  AlertCircle,
+  Gauge,
+  Table2,
+  ListChecks,
+  TrendingUp,
+  FileText,
+} from "lucide-react";
 import Nav from "@/components/Nav";
 import { queryOne, query } from "@/lib/db";
 import type { PipelineRun, DataProfile, TransformRule } from "@/lib/types";
@@ -179,40 +191,49 @@ export default async function RunDetailPage({
       <RunStatusPoller runId={rid} currentStatus={run.status} pipelineId={id} />
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         {/* Breadcrumb */}
-        <div className="text-sm text-gray-500">
-          <Link href="/dashboard" className="hover:text-gray-300">Dashboard</Link>
-          {" / "}
-          <Link href={`/pipelines/${id}`} className="hover:text-gray-300">{run.pipeline_name}</Link>
-          {" / "}
-          <span className="text-gray-300">Run</span>
-        </div>
+        <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-gray-500">
+          <Link href="/dashboard" className="hover:text-gray-300 transition-colors">Dashboard</Link>
+          <ChevronRight className="h-3.5 w-3.5 text-gray-700" aria-hidden="true" />
+          <Link href={`/pipelines/${id}`} className="hover:text-gray-300 transition-colors truncate max-w-[200px]">{run.pipeline_name}</Link>
+          <ChevronRight className="h-3.5 w-3.5 text-gray-700" aria-hidden="true" />
+          <span className="text-gray-300 font-medium">Run</span>
+        </nav>
 
         {/* Status banner */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-between flex-wrap gap-4">
+        <div className={`bg-gray-900 border border-gray-800 border-l-2 rounded-xl p-6 flex items-center gap-6 flex-wrap ${statusColors[run.status] ?? "text-gray-500"}`} style={{ borderLeftColor: "currentColor" }}>
           <div>
-            <div className="text-sm text-gray-400 mb-1">Status</div>
-            <div className={`text-lg font-semibold capitalize ${statusColors[run.status] ?? "text-gray-300"}`}>
+            <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">Status</div>
+            <span
+              className={`inline-flex items-center gap-1.5 text-sm font-semibold capitalize px-2.5 py-1 rounded-full bg-current/10 ${
+                statusColors[run.status] ?? "text-gray-300"
+              }`}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
               {run.status.replace(/_/g, " ")}
-            </div>
+            </span>
           </div>
-          {run.file_format && (
-            <div className="text-right">
-              <div className="text-sm text-gray-400 mb-1">Format</div>
-              <div className="text-white font-medium">{run.file_format.toUpperCase()}</div>
-            </div>
-          )}
-          {run.row_count_raw != null && (
-            <div className="text-right">
-              <div className="text-sm text-gray-400 mb-1">{run.mode === "document" ? "Lines (raw)" : "Rows (raw)"}</div>
-              <div className="text-white font-medium">{run.row_count_raw.toLocaleString()}</div>
-            </div>
-          )}
-          {run.row_count_processed != null && (
-            <div className="text-right">
-              <div className="text-sm text-gray-400 mb-1">{run.mode === "document" ? "Lines (processed)" : "Rows (processed)"}</div>
-              <div className="text-white font-medium">{run.row_count_processed.toLocaleString()}</div>
-            </div>
-          )}
+
+          <div className="flex items-center gap-6 flex-wrap">
+            {run.file_format && (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">Format</div>
+                <div className="text-white font-medium tabular-nums">{run.file_format.toUpperCase()}</div>
+              </div>
+            )}
+            {run.row_count_raw != null && (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">{run.mode === "document" ? "Lines (raw)" : "Rows (raw)"}</div>
+                <div className="text-white font-medium tabular-nums">{run.row_count_raw.toLocaleString()}</div>
+              </div>
+            )}
+            {run.row_count_processed != null && (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">{run.mode === "document" ? "Lines (processed)" : "Rows (processed)"}</div>
+                <div className="text-white font-medium tabular-nums">{run.row_count_processed.toLocaleString()}</div>
+              </div>
+            )}
+          </div>
+
           {canDownload && (
             <div className="ml-auto">
               <DownloadButton
@@ -249,7 +270,10 @@ export default async function RunDetailPage({
         {/* Quality score gauges */}
         {(rawProfile || processedProfile) && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-white mb-6">Data Quality Score</h2>
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-white mb-6">
+              <Gauge className="h-5 w-5 text-indigo-400" aria-hidden="true" />
+              Data Quality Score
+            </h2>
             <div className="flex items-end justify-around gap-4 flex-wrap">
               <QualityGauge score={rawProfile?.quality_score ?? null} label="Before" />
 
@@ -274,7 +298,10 @@ export default async function RunDetailPage({
         {/* Profile section — document vs tabular */}
         {rawProfile && run.mode === "document" ? (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Document Profile</h2>
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-white mb-4">
+              <FileText className="h-5 w-5 text-indigo-400" aria-hidden="true" />
+              Document Profile
+            </h2>
             <DocumentProfile
               qualityScore={rawProfile.quality_score ?? 0}
               totalLines={rawProfile.total_rows ?? 0}
@@ -284,7 +311,10 @@ export default async function RunDetailPage({
         ) : (
           rawProfile?.column_stats && Object.keys(rawProfile.column_stats).length > 0 && (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-              <h2 className="text-lg font-semibold text-white mb-4">Column Profile (Raw)</h2>
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-white mb-4">
+                <Table2 className="h-5 w-5 text-indigo-400" aria-hidden="true" />
+                Column Profile (Raw)
+              </h2>
               <ColumnStatsTable columnStats={rawProfile.column_stats} />
             </div>
           )
@@ -293,21 +323,26 @@ export default async function RunDetailPage({
         {/* Transform rules */}
         {rules.length > 0 && (
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-white">Transform Rules</h2>
+            <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-white">
+                <ListChecks className="h-5 w-5 text-indigo-400" aria-hidden="true" />
+                Transform Rules
+              </h2>
               <div className="text-sm text-gray-400">
-                {rules.filter((r) => r.status === "approved").length} approved ·{" "}
-                {rules.filter((r) => r.status === "rejected").length} rejected ·{" "}
-                {rules.filter((r) => r.status === "pending").length} pending
+                <span className="text-green-400">{rules.filter((r) => r.status === "approved").length} approved</span> ·{" "}
+                <span className="text-red-400">{rules.filter((r) => r.status === "rejected").length} rejected</span> ·{" "}
+                <span className="text-yellow-400">{rules.filter((r) => r.status === "pending").length} pending</span>
               </div>
             </div>
 
             {run.status === "awaiting_approval" && (
               <Link
                 href={`/pipelines/${id}/runs/${rid}/review`}
-                className="block w-full text-center bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-lg font-medium transition-colors mb-4"
+                className="group flex w-full items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white py-3 rounded-lg font-medium transition-all shadow-lg shadow-indigo-900/30 mb-4"
               >
-                Open Data PR →
+                <GitPullRequest className="h-4 w-4" aria-hidden="true" />
+                Open Data PR
+                <span className="transition-transform group-hover:translate-x-0.5" aria-hidden="true">→</span>
               </Link>
             )}
 
@@ -315,20 +350,20 @@ export default async function RunDetailPage({
               {rules.map((rule) => (
                 <div
                   key={rule.id}
-                  className={`bg-gray-900 border rounded-xl p-4 ${
+                  className={`bg-gray-900 border border-l-2 rounded-xl p-4 ${
                     rule.status === "approved"
-                      ? "border-green-500/30"
+                      ? "border-gray-800 border-l-green-500"
                       : rule.status === "rejected"
-                      ? "border-red-500/30"
-                      : "border-gray-800"
+                      ? "border-gray-800 border-l-red-500"
+                      : "border-gray-800 border-l-yellow-500"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="text-white text-sm font-medium">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                        <code className="text-xs font-mono bg-gray-800 text-gray-200 px-2 py-0.5 rounded border border-gray-700">
                           {rule.rule_type.replace(/_/g, " ")}
-                        </span>
+                        </code>
                         {rule.column_name && (
                           <code className="text-xs bg-gray-800 text-indigo-300 px-2 py-0.5 rounded">
                             {rule.column_name}
@@ -336,7 +371,7 @@ export default async function RunDetailPage({
                         )}
                       </div>
                       {rule.ai_reasoning && (
-                        <p className="text-gray-400 text-xs">{rule.ai_reasoning}</p>
+                        <p className="text-gray-400 text-sm leading-relaxed">{rule.ai_reasoning}</p>
                       )}
                     </div>
                     <span
@@ -360,7 +395,10 @@ export default async function RunDetailPage({
         {/* Quality trend chart */}
         {trendData.length >= 2 && (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Quality Trend</h2>
+            <h2 className="flex items-center gap-2 text-lg font-semibold text-white mb-4">
+              <TrendingUp className="h-5 w-5 text-indigo-400" aria-hidden="true" />
+              Quality Trend
+            </h2>
             <QualityTrendChart data={trendData} />
           </div>
         )}
@@ -369,7 +407,7 @@ export default async function RunDetailPage({
         {schemaDiff && (
           <div className="bg-gray-900 border border-yellow-500/30 rounded-xl p-6">
             <div className="flex items-center gap-2 mb-4">
-              <span className="text-yellow-400 text-lg">⚠</span>
+              <AlertTriangle className="h-5 w-5 text-yellow-400" aria-hidden="true" />
               <h2 className="text-lg font-semibold text-white">Schema Drift Detected</h2>
             </div>
             <SchemaDiffViewer diff={schemaDiff} />
@@ -378,20 +416,25 @@ export default async function RunDetailPage({
 
         {/* Empty/loading states */}
         {(run.status === "pending" || run.status === "profiling") && (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-            <p className="text-gray-400">Profiling your data… check back in a few seconds.</p>
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-10 flex flex-col items-center text-center">
+            <Loader2 className="h-7 w-7 text-indigo-400 animate-spin mb-4" aria-hidden="true" />
+            <p className="text-white font-medium">Profiling your data</p>
+            <p className="text-gray-400 text-sm mt-1">Analyzing structure and quality — this updates automatically in a few seconds.</p>
           </div>
         )}
 
         {run.status === "awaiting_ai" && (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
-            <p className="text-gray-400">Claude is analyzing your data…</p>
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-10 flex flex-col items-center text-center">
+            <Loader2 className="h-7 w-7 text-indigo-400 animate-spin mb-4" aria-hidden="true" />
+            <p className="text-white font-medium">Claude is analyzing your data</p>
+            <p className="text-gray-400 text-sm mt-1">Generating transform suggestions — this page will refresh on its own.</p>
           </div>
         )}
 
         {run.status === "failed" && run.error_message && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm">
-            {run.error_message}
+          <div className="flex items-start gap-2.5 bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-400 text-sm">
+            <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" aria-hidden="true" />
+            <span>{run.error_message}</span>
           </div>
         )}
       </main>
