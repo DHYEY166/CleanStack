@@ -6,10 +6,7 @@ const nextConfig: NextConfig = {
 };
 
 export default withSentryConfig(nextConfig, {
-  org: "cleanstack",
-  project: "cleanstack-nextjs",
-  silent: !process.env.CI,
-  widenClientFileUpload: true,
-  disableLogger: true,
-  automaticVercelMonitors: false,
+  silent: true,
+  // Skip source map upload — no SENTRY_AUTH_TOKEN configured
+  sourcemaps: { disable: true },
 });
