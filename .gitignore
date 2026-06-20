@@ -70,3 +70,6 @@ lambdas/**/.venv/
 *.pfx
 secrets.json
 credentials.json
+
+# clerk configuration (can include secrets)
+/.clerk/
