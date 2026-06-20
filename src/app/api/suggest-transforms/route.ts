@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateText, Output } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { getSubscription, getMonthlyUsage, PLANS, type PlanId } from "@/lib/billing";
+import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
 
 export const maxDuration = 300;
 import { z } from "zod";
@@ -60,8 +61,8 @@ export async function POST(req: NextRequest) {
   if (!run_id) return NextResponse.json({ error: "run_id required" }, { status: 400 });
 
   try {
-  const run = await queryOne<PipelineRun & { template_id: string | null; mode: string }>(
-    `SELECT pr.*, p.template_id
+  const run = await queryOne<PipelineRun & { template_id: string | null; mode: string; team_id: string }>(
+    `SELECT pr.*, p.template_id, p.team_id
      FROM pipeline_runs pr
      JOIN pipelines p ON pr.pipeline_id = p.id
      WHERE pr.id = $1`,
@@ -98,6 +99,13 @@ export async function POST(req: NextRequest) {
           );
           return NextResponse.json({ error: "Quota exceeded" }, { status: 402 });
         }
+      }
+      // AI spend cap check
+      const aiSpend = await checkAiSpendCap(pipelineRow.team_id);
+      if (aiSpend.blocked) {
+        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+          [run_id, `AI spend cap reached ($${aiSpend.currentSpendUsd.toFixed(2)} / $${aiSpend.hardCapUsd} this month). Contact support.`]);
+        return NextResponse.json({ error: "AI spend cap exceeded" }, { status: 402 });
       }
     }
   }
@@ -269,6 +277,7 @@ IMPORTANT RULES:
         prompt: docPrompt,
       });
       docOutput = result.output;
+      meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
     } catch (aiErr) {
       console.error("[suggest-transforms] Bedrock document error:", aiErr);
       await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
@@ -539,6 +548,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
       prompt,
     });
     output = result.output;
+    meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
   } catch (aiErr) {
     console.error("[suggest-transforms] Bedrock error:", aiErr);
     await queryOne(

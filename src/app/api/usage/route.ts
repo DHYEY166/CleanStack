@@ -1,6 +1,6 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
-import { checkQuota } from "@/lib/billing";
+import { getCachedQuota } from "@/lib/quota-cache";
 
 export async function GET() {
   const { userId } = await auth();
@@ -9,7 +9,7 @@ export async function GET() {
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
-  const quota = await checkQuota(userId, email);
+  const quota = await getCachedQuota(userId, email);
 
   const percentage =
     quota.isAdmin || quota.includedRows === Infinity

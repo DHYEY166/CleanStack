@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { queryOne } from "@/lib/db";
-import { checkQuota } from "@/lib/billing";
+import { getCachedQuota } from "@/lib/quota-cache";
 import type { PipelineRun } from "@/lib/types";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
-  const quota = await checkQuota(userId, email);
+  const quota = await getCachedQuota(userId, email);
   if (quota.blocked) {
     return NextResponse.json(
       {

@@ -3,6 +3,7 @@ import { generateText } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
+import { meterBedrockCall } from "@/lib/bedrock-meter";
 import type { TransformRule, DataProfile } from "@/lib/types";
 
 export const maxDuration = 120;
@@ -57,23 +58,23 @@ async function runConsultant(
   systemPrompt: string,
   userPrompt: string,
   rules: TransformRule[]
-): Promise<VoteResult[]> {
+): Promise<{ votes: VoteResult[]; usage: { promptTokens: number; completionTokens: number } }> {
   try {
-    const { text } = await generateText({
+    const result = await generateText({
       model: bedrock("us.anthropic.claude-sonnet-4-6"),
       system: systemPrompt,
       prompt: userPrompt,
       maxOutputTokens: 1500,
     });
-    return parseVotes(text, rules);
+    return { votes: parseVotes(result.text, rules), usage: result.usage };
   } catch (e) {
     console.error(`[auto-validate] ${persona} failed:`, e);
     // On error, approve all LOW risk, reject HIGH risk (conservative fallback)
-    return rules.map((r) => ({
+    return { votes: rules.map((r) => ({
       rule_id: r.id,
       vote: (RISK_THRESHOLDS[r.rule_type] ?? 2) <= 1 ? "APPROVE" : "REJECT" as const,
       reason: `${persona} unavailable`,
-    }));
+    })), usage: { promptTokens: 0, completionTokens: 0 } };
   }
 }
 
@@ -139,7 +140,13 @@ export async function POST(
 {"votes":[{"rule_id":"<id>","vote":"APPROVE","reason":"<one sentence>"},{"rule_id":"<id>","vote":"REJECT","reason":"<one sentence>"}]}
 Include a vote for every rule_id listed. No extra text.`;
 
-  const [auditorVotes, statVotes, domainVotes] = await Promise.all([
+  // Fetch team_id for metering
+  const pipelineRow = await queryOne<{ team_id: string; pipeline_id: string }>(
+    "SELECT p.team_id, pr.pipeline_id FROM pipeline_runs pr JOIN pipelines p ON pr.pipeline_id = p.id WHERE pr.id = $1",
+    [runId]
+  );
+
+  const [auditorResult, statResult, domainResult] = await Promise.all([
     runConsultant(
       "SafetyAuditor",
       `You are a Data Safety Auditor. Your job: review proposed data cleaning rules for a dataset that has ALREADY been partially cleaned in a previous pass. Be strict about rules that delete or drop rows — require strong justification. Approve safe transformations freely.
@@ -163,6 +170,20 @@ ${responseFormat}`,
       rules
     ),
   ]);
+
+  // Meter all 3 Bedrock calls
+  if (pipelineRow?.team_id) {
+    const MODEL = "us.anthropic.claude-sonnet-4-6";
+    [
+      { r: auditorResult, type: "auto_validate_auditor" },
+      { r: statResult, type: "auto_validate_stat" },
+      { r: domainResult, type: "auto_validate_domain" },
+    ].forEach(({ r, type }) =>
+      meterBedrockCall({ teamId: pipelineRow.team_id, runId, callType: type, model: MODEL, usage: r.usage })
+    );
+  }
+
+  const [auditorVotes, statVotes, domainVotes] = [auditorResult.votes, statResult.votes, domainResult.votes];
 
   // Tally votes per rule
   const approved: string[] = [];
