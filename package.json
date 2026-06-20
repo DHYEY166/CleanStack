@@ -13,6 +13,7 @@
     "@ai-sdk/anthropic": "^3.0.84",
     "@ai-sdk/react": "^3.0.206",
     "@anthropic-ai/sdk": "^0.104.1",
+    "@aws-sdk/client-rds-data": "^3.1073.0",
     "@aws-sdk/client-s3": "^3.1068.0",
     "@aws-sdk/client-sqs": "^3.1068.0",
     "@aws-sdk/rds-signer": "^3.1070.0",

@@ -3,7 +3,6 @@ import { query } from "@/lib/db";
 
 export const maxDuration = 30;
 
-const STUCK_STATUSES = ["profiling", "awaiting_ai", "queued", "running"];
 const STUCK_AFTER_MINUTES = 20;
 
 export async function GET(req: Request) {
@@ -17,10 +16,10 @@ export async function GET(req: Request) {
     `UPDATE pipeline_runs
      SET status = 'failed',
          error_message = 'Run timed out after 20 minutes — likely a Lambda or network failure. Please retry.'
-     WHERE status = ANY($1::text[])
-       AND created_at < $2
+     WHERE status IN ('profiling', 'awaiting_ai', 'queued', 'running')
+       AND created_at < $1
      RETURNING id`,
-    [STUCK_STATUSES, cutoff]
+    [cutoff]
   );
 
   console.log(`[reconciler] Marked ${updated.length} stuck runs as failed`);
