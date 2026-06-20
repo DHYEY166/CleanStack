@@ -7,4 +7,9 @@ Sentry.init({
   replaysOnErrorSampleRate: 1.0,
   replaysSessionSampleRate: 0.01,
   integrations: [Sentry.replayIntegration()],
+  // Only capture errors from our production domain — prevents DSN abuse
+  allowUrls: [
+    /https:\/\/clean-stack-eta\.vercel\.app/,
+    /http:\/\/localhost/,
+  ],
 });
