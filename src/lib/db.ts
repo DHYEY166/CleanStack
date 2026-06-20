@@ -22,19 +22,37 @@ const SECRET_ARN =
 
 const DATABASE = "cleanstack";
 
-function toField(value: unknown): Field {
-  if (value === null || value === undefined) return { isNull: true };
-  if (typeof value === "boolean") return { booleanValue: value };
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type TypeHint = "UUID" | "TIMESTAMP" | "DATE" | "TIME" | "JSON";
+
+function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
+  if (value === null || value === undefined) return { field: { isNull: true } };
+  if (typeof value === "boolean") return { field: { booleanValue: value } };
   if (typeof value === "number") {
-    if (Number.isInteger(value)) return { longValue: value };
-    return { doubleValue: value };
+    if (Number.isInteger(value)) return { field: { longValue: value } };
+    return { field: { doubleValue: value } };
   }
-  return { stringValue: String(value) };
+  if (typeof value === "object") {
+    // Objects/arrays → JSONB
+    return {
+      field: { stringValue: JSON.stringify(value) },
+      typeHint: "JSON",
+    };
+  }
+  const str = String(value);
+  if (UUID_RE.test(str)) {
+    return { field: { stringValue: str }, typeHint: "UUID" };
+  }
+  return { field: { stringValue: str } };
 }
 
 /**
- * Converts $1,$2,... positional params to :p1,:p2,... named params.
- * Arrays are expanded inline: WHERE x = ANY($1::text[]) → WHERE x IN (:p1_0,:p1_1,...)
+ * Converts $1,$2... positional params → :p1,:p2... named params.
+ * Preserves SQL type casts (::uuid, ::jsonb, etc.) — PostgreSQL handles the cast.
+ * Arrays passed as JS arrays are expanded: IN (:p1,:p2,...).
+ * Only strips array-type suffixes (::text[], ::uuid[]) when expanding inline.
  */
 function convertQuery(
   text: string,
@@ -43,37 +61,28 @@ function convertQuery(
   const parameters: SqlParameter[] = [];
   let paramCount = 0;
 
-  const sql = text.replace(/\$(\d+)(?:::[a-z\[\]]+)?/gi, (_match, n) => {
+  // Replace $N (without stripping type casts — keep ::uuid, ::jsonb etc. in SQL)
+  const sql = text.replace(/\$(\d+)/g, (_match, n) => {
     const value = params[parseInt(n, 10) - 1];
 
     if (Array.isArray(value)) {
-      // Expand array into individual named params
       const names = value.map((v) => {
         const name = `p${++paramCount}`;
-        parameters.push({ name, value: toField(v) });
+        const { field, typeHint } = toParam(v);
+        parameters.push({ name, value: field, ...(typeHint ? { typeHint } : {}) });
         return `:${name}`;
       });
-      // Check if this was an ANY($n) pattern — replace with IN (...)
-      const anyPattern = new RegExp(
-        `=\\s*ANY\\s*\\(\\s*\\$${n}(?:::[a-z\\[\\]]+)?\\s*\\)`,
-        "i"
-      );
-      if (anyPattern.test(text)) {
-        return `IN (${names.join(", ")})`;
-      }
       return `(${names.join(", ")})`;
     }
 
     const name = `p${++paramCount}`;
-    parameters.push({ name, value: toField(value) });
+    const { field, typeHint } = toParam(value);
+    parameters.push({ name, value: field, ...(typeHint ? { typeHint } : {}) });
     return `:${name}`;
   });
 
-  // Clean up "= ANY(...)" that was already rewritten above
-  const cleanSql = sql.replace(
-    /IN\s*\(IN\s*\(([^)]+)\)\)/gi,
-    "IN ($1)"
-  );
+  // Strip orphaned array type casts left after inline expansion e.g. (:p1,:p2)::text[]
+  const cleanSql = sql.replace(/\((:p\d+(?:,\s*:p\d+)*)\)::[a-z]+\[\]/gi, "($1)");
 
   return { sql: cleanSql, parameters };
 }
@@ -172,5 +181,4 @@ export async function withTransaction<T>(
   }
 }
 
-// Keep default export for any legacy imports
 export default { query, queryOne, withTransaction };
