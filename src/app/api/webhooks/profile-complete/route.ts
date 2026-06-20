@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { queryOne } from "@/lib/db";
 
-export const maxDuration = 300;
+// When AI_QUEUE_ENABLED=true: enqueue to SQS → return 200 immediately (profiler doesn't wait)
+// When AI_QUEUE_ENABLED=false: direct HTTP call to suggest-transforms (original behavior)
+const AI_QUEUE_ENABLED = process.env.AI_QUEUE_ENABLED === "true";
+
+const sqs = new SQSClient({ region: process.env.AWS_REGION || "us-east-1" });
+
+export const maxDuration = AI_QUEUE_ENABLED ? 30 : 300;
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-webhook-secret");
@@ -26,6 +33,18 @@ export async function POST(req: NextRequest) {
     [run_id]
   );
 
+  if (AI_QUEUE_ENABLED) {
+    // Async path: enqueue and return immediately — profiler no longer blocks
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: process.env.AI_JOBS_QUEUE_URL,
+      MessageBody: JSON.stringify({ run_id }),
+      MessageGroupId: undefined,
+    }));
+    console.log(`[profile-complete] enqueued run ${run_id} to SQS`);
+    return NextResponse.json({ ok: true, queued: true });
+  }
+
+  // Sync fallback (original behavior)
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? `https://${req.headers.get("host")}`;
   const res = await fetch(`${baseUrl}/api/suggest-transforms`, {
     method: "POST",
