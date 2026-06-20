@@ -25,6 +25,10 @@ const DATABASE = "cleanstack";
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// ISO 8601 date/datetime strings
+const ISO_DATE_RE =
+  /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
 type TypeHint = "UUID" | "TIMESTAMP" | "DATE" | "TIME" | "JSON";
 
 function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
@@ -34,16 +38,20 @@ function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
     if (Number.isInteger(value)) return { field: { longValue: value } };
     return { field: { doubleValue: value } };
   }
+  // Date instances → TIMESTAMP (must check before generic object)
+  if (value instanceof Date) {
+    return { field: { stringValue: value.toISOString() }, typeHint: "TIMESTAMP" };
+  }
   if (typeof value === "object") {
-    // Objects/arrays → JSONB
-    return {
-      field: { stringValue: JSON.stringify(value) },
-      typeHint: "JSON",
-    };
+    // Plain objects/arrays → JSONB
+    return { field: { stringValue: JSON.stringify(value) }, typeHint: "JSON" };
   }
   const str = String(value);
   if (UUID_RE.test(str)) {
     return { field: { stringValue: str }, typeHint: "UUID" };
+  }
+  if (ISO_DATE_RE.test(str)) {
+    return { field: { stringValue: str }, typeHint: "TIMESTAMP" };
   }
   return { field: { stringValue: str } };
 }
@@ -99,7 +107,13 @@ function recordsToRows<T>(
       if (field.isNull) {
         row[col.name] = null;
       } else if ("stringValue" in field) {
-        row[col.name] = field.stringValue;
+        const s = field.stringValue!;
+        // Auto-parse JSONB columns returned as JSON strings
+        if (s.length > 0 && (s[0] === "{" || s[0] === "[")) {
+          try { row[col.name] = JSON.parse(s); } catch { row[col.name] = s; }
+        } else {
+          row[col.name] = s;
+        }
       } else if ("longValue" in field) {
         row[col.name] = field.longValue;
       } else if ("doubleValue" in field) {
