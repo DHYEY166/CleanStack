@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
   const { run_id } = await req.json();
   if (!run_id) return NextResponse.json({ error: "run_id required" }, { status: 400 });
 
+  try {
   const run = await queryOne<PipelineRun & { template_id: string | null; mode: string }>(
     `SELECT pr.*, p.template_id
      FROM pipeline_runs pr
@@ -594,6 +595,16 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   }
 
   return NextResponse.json({ ok: true, rules_count: output.rules.length });
+  } catch (err) {
+    console.error("[suggest-transforms] unhandled error:", err);
+    try {
+      await queryOne(
+        "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        [run_id, `Internal error: ${String(err).slice(0, 500)}`]
+      );
+    } catch {}
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
 }
 
 function buildSampleRows(
