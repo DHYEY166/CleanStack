@@ -10,7 +10,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
-  "connect-src 'self' https://*.sentry.io https://*.ingest.sentry.io https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev https://sqs.us-east-1.amazonaws.com",
+  "connect-src 'self' https://*.sentry.io https://*.ingest.sentry.io https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev https://sqs.us-east-1.amazonaws.com https://*.s3.amazonaws.com https://*.s3.us-east-1.amazonaws.com",
   "frame-src 'none'",
   "object-src 'none'",
   "base-uri 'self'",
