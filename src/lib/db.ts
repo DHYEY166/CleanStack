@@ -31,6 +31,11 @@ const ISO_DATE_RE =
 
 type TypeHint = "UUID" | "TIMESTAMP" | "DATE" | "TIME" | "JSON";
 
+// Aurora Data API requires "YYYY-MM-DD HH:MM:SS.fff" not ISO 8601 "T"/"Z" format
+function toTimestampStr(d: Date): string {
+  return d.toISOString().replace("T", " ").replace("Z", "");
+}
+
 function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
   if (value === null || value === undefined) return { field: { isNull: true } };
   if (typeof value === "boolean") return { field: { booleanValue: value } };
@@ -40,7 +45,7 @@ function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
   }
   // Date instances → TIMESTAMP (must check before generic object)
   if (value instanceof Date) {
-    return { field: { stringValue: value.toISOString() }, typeHint: "TIMESTAMP" };
+    return { field: { stringValue: toTimestampStr(value) }, typeHint: "TIMESTAMP" };
   }
   if (typeof value === "object") {
     // Plain objects/arrays → JSONB
@@ -51,7 +56,8 @@ function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
     return { field: { stringValue: str }, typeHint: "UUID" };
   }
   if (ISO_DATE_RE.test(str)) {
-    return { field: { stringValue: str }, typeHint: "TIMESTAMP" };
+    // Aurora Data API requires PostgreSQL format "YYYY-MM-DD HH:MM:SS.fff", not ISO 8601
+    return { field: { stringValue: toTimestampStr(new Date(str)) }, typeHint: "TIMESTAMP" };
   }
   return { field: { stringValue: str } };
 }
