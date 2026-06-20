@@ -8,7 +8,7 @@ const AI_QUEUE_ENABLED = process.env.AI_QUEUE_ENABLED === "true";
 
 const sqs = new SQSClient({ region: process.env.AWS_REGION || "us-east-1" });
 
-export const maxDuration = AI_QUEUE_ENABLED ? 30 : 300;
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-webhook-secret");
