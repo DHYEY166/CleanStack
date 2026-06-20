@@ -27,12 +27,27 @@ export async function POST(req: NextRequest) {
 
   if (!run_id) return NextResponse.json({ error: "run_id required" }, { status: 400 });
 
-  const run = await queryOne<{ id: string; pipeline_id: string; raw_s3_key: string }>(
-    "SELECT id, pipeline_id, raw_s3_key FROM pipeline_runs WHERE id = $1",
+  const TERMINAL_STATUSES = new Set(["completed", "failed", "awaiting_approval", "queued", "running"]);
+
+  const run = await queryOne<{ id: string; pipeline_id: string; raw_s3_key: string; status: string }>(
+    "SELECT id, pipeline_id, raw_s3_key, status FROM pipeline_runs WHERE id = $1",
     [run_id]
   );
 
   if (!run) return NextResponse.json({ error: "Run not found" }, { status: 404 });
+
+  // Prevent resetting terminal-state runs — blocks attacker resetting completed/approved runs
+  if (TERMINAL_STATUSES.has(run.status)) {
+    console.log(`[profile-complete] run ${run_id} already in terminal state ${run.status}, skipping`);
+    return NextResponse.json({ ok: true, skipped: true });
+  }
+
+  // Validate S3 key has expected structure (4 path segments)
+  const keyParts = (run.raw_s3_key ?? "").split("/");
+  if (keyParts.length < 4) {
+    console.error(`[profile-complete] invalid S3 key structure for run ${run_id}`);
+    return NextResponse.json({ error: "Invalid run state" }, { status: 400 });
+  }
 
   await queryOne(
     "UPDATE pipeline_runs SET status = 'awaiting_ai' WHERE id = $1",

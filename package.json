@@ -19,6 +19,7 @@
     "@aws-sdk/rds-signer": "^3.1070.0",
     "@aws-sdk/s3-request-presigner": "^3.1068.0",
     "@clerk/nextjs": "^7.5.2",
+    "@e965/xlsx": "^0.20.3",
     "@sentry/nextjs": "^10.59.0",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
@@ -30,8 +31,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
-    "recharts": "^3.8.1",
-    "xlsx": "^0.18.5"
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

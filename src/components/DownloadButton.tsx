@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import * as XLSX from "xlsx";
+import * as XLSX from "@e965/xlsx";
 
 type Format = "csv" | "tsv" | "txt" | "json" | "jsonl" | "xlsx" | "xml";
 

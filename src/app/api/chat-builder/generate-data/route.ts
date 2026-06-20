@@ -43,7 +43,7 @@ function jsonToTsv(rows: Record<string, unknown>[]): string {
 
 function jsonToXlsx(rows: Record<string, unknown>[]): Buffer {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const XLSX = require("xlsx");
+  const XLSX = require("@e965/xlsx");
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Data");

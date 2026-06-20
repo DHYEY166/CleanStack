@@ -22,7 +22,7 @@ function seededShuffle<T>(arr: T[], seed: string): T[] {
 
 function parseToRows(bytes: Buffer, fmt: string): Record<string, unknown>[] {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const XLSX = require("xlsx");
+  const XLSX = require("@e965/xlsx");
 
   if (fmt === "json") {
     const parsed = JSON.parse(bytes.toString("utf-8"));
