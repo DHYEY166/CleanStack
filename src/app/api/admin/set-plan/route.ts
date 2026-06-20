@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { queryOne } from "@/lib/db";
 import { PLANS, type PlanId } from "@/lib/billing";
 
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
 export async function POST(req: Request) {
-  if (req.headers.get("x-admin-secret") !== process.env.ADMIN_SECRET) {
+  if (!safeCompare(req.headers.get("x-admin-secret") ?? "", process.env.ADMIN_SECRET ?? "")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

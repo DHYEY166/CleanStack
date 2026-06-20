@@ -12,13 +12,15 @@ const client = new RDSDataClient({
   region: process.env.AWS_REGION || "us-east-1",
 });
 
-const CLUSTER_ARN =
-  process.env.AURORA_CLUSTER_ARN ||
-  "arn:aws:rds:us-east-1:989088054490:cluster:database-1";
+function getArns() {
+  const clusterArn = process.env.AURORA_CLUSTER_ARN;
+  const secretArn = process.env.AURORA_SECRET_ARN;
+  if (!clusterArn || !secretArn) {
+    throw new Error("AURORA_CLUSTER_ARN and AURORA_SECRET_ARN env vars are required");
+  }
+  return { clusterArn, secretArn };
+}
 
-const SECRET_ARN =
-  process.env.AURORA_SECRET_ARN ||
-  "arn:aws:secretsmanager:us-east-1:989088054490:secret:cleanstack-db-master-VhiPpa";
 
 const DATABASE = "cleanstack";
 
@@ -145,12 +147,13 @@ export async function query<T = unknown>(
   params: unknown[] = [],
   transactionId?: string
 ): Promise<T[]> {
+  const { clusterArn, secretArn } = getArns();
   const { sql, parameters } = convertQuery(text, params);
 
   const result = await client.send(
     new ExecuteStatementCommand({
-      resourceArn: CLUSTER_ARN,
-      secretArn: SECRET_ARN,
+      resourceArn: clusterArn,
+      secretArn: secretArn,
       database: DATABASE,
       sql,
       parameters,
@@ -175,10 +178,11 @@ export async function queryOne<T = unknown>(
 export async function withTransaction<T>(
   fn: (txId: string) => Promise<T>
 ): Promise<T> {
+  const { clusterArn, secretArn } = getArns();
   const begin = await client.send(
     new BeginTransactionCommand({
-      resourceArn: CLUSTER_ARN,
-      secretArn: SECRET_ARN,
+      resourceArn: clusterArn,
+      secretArn: secretArn,
       database: DATABASE,
     })
   );
@@ -187,8 +191,8 @@ export async function withTransaction<T>(
     const result = await fn(txId);
     await client.send(
       new CommitTransactionCommand({
-        resourceArn: CLUSTER_ARN,
-        secretArn: SECRET_ARN,
+        resourceArn: clusterArn,
+        secretArn: secretArn,
         transactionId: txId,
       })
     );
@@ -196,8 +200,8 @@ export async function withTransaction<T>(
   } catch (e) {
     await client.send(
       new RollbackTransactionCommand({
-        resourceArn: CLUSTER_ARN,
-        secretArn: SECRET_ARN,
+        resourceArn: clusterArn,
+        secretArn: secretArn,
         transactionId: txId,
       })
     );

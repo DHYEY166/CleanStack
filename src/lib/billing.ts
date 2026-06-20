@@ -38,7 +38,15 @@ const ADMIN_EMAILS = new Set(
     .filter(Boolean)
 );
 
-export function isAdmin(email: string | null | undefined): boolean {
+const ADMIN_USER_IDS = new Set(
+  (process.env.ADMIN_USER_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+);
+
+export function isAdmin(email: string | null | undefined, userId?: string | null): boolean {
+  if (userId && ADMIN_USER_IDS.has(userId)) return true;
   return !!email && ADMIN_EMAILS.has(email.toLowerCase());
 }
 
@@ -69,9 +77,10 @@ export async function getMonthlyUsage(teamId: string): Promise<number> {
 
 export async function checkQuota(
   teamId: string,
-  email?: string | null
+  email?: string | null,
+  userId?: string | null
 ): Promise<QuotaResult> {
-  if (isAdmin(email)) {
+  if (isAdmin(email, userId)) {
     return {
       plan: "admin",
       includedRows: Infinity,

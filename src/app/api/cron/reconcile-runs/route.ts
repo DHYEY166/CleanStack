@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { query } from "@/lib/db";
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 export const maxDuration = 30;
 
 const STUCK_AFTER_MINUTES = 20;
 
 export async function GET(req: Request) {
-  if (req.headers.get("Authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!safeCompare(req.headers.get("Authorization") ?? "", `Bearer ${process.env.CRON_SECRET ?? ""}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

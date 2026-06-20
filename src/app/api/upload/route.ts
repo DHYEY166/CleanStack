@@ -2,7 +2,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { queryOne } from "@/lib/db";
+import { queryOne, queryOneWithTeam } from "@/lib/db";
 import { getCachedQuota } from "@/lib/quota-cache";
 import type { PipelineRun } from "@/lib/types";
 
@@ -44,6 +44,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const pipeline = await queryOneWithTeam<{ id: string }>(
+      userId,
+      "SELECT id FROM pipelines WHERE id = $1 AND team_id = $2",
+      [pipeline_id, userId]
+    );
+    if (!pipeline) return NextResponse.json({ error: "Pipeline not found" }, { status: 404 });
+
     const run = await queryOne<PipelineRun>(
       `INSERT INTO pipeline_runs (pipeline_id, status, file_format, raw_s3_key, started_at)
        VALUES ($1, 'pending', $2, $3, now())
@@ -71,6 +78,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
   } catch (err) {
     console.error("[POST /api/upload]", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { queryOne } from "@/lib/db";
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 // When AI_QUEUE_ENABLED=true: enqueue to SQS → return 200 immediately (profiler doesn't wait)
 // When AI_QUEUE_ENABLED=false: direct HTTP call to suggest-transforms (original behavior)
@@ -12,7 +18,7 @@ export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const secret = req.headers.get("x-webhook-secret");
-  if (secret !== process.env.WEBHOOK_SECRET) {
+  if (!safeCompare(secret ?? "", process.env.WEBHOOK_SECRET ?? "")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -45,7 +51,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Sync fallback (original behavior)
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? `https://${req.headers.get("host")}`;
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://clean-stack-eta.vercel.app";
   const res = await fetch(`${baseUrl}/api/suggest-transforms`, {
     method: "POST",
     headers: {

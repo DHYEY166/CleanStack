@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { generateText, type LanguageModelUsage } from "ai";
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
@@ -83,7 +89,7 @@ export async function POST(
   { params }: { params: Promise<{ runId: string }> }
 ) {
   const secret = req.headers.get("x-webhook-secret");
-  if (secret !== process.env.WEBHOOK_SECRET) {
+  if (!safeCompare(secret ?? "", process.env.WEBHOOK_SECRET ?? "")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

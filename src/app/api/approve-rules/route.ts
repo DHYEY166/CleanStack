@@ -48,8 +48,8 @@ export async function POST(req: NextRequest) {
         return query(
           `UPDATE transform_rules
            SET status = $2${params ? ", parameters = $3" : ""}
-           WHERE id = $1`,
-          params ? [d.rule_id, d.action, params] : [d.rule_id, d.action]
+           WHERE id = $1 AND run_id = $${params ? "4" : "3"}`,
+          params ? [d.rule_id, d.action, params, run_id] : [d.rule_id, d.action, run_id]
         );
       })
     );
@@ -87,6 +87,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[POST /api/approve-rules]", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

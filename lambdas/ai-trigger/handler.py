@@ -1,10 +1,13 @@
 import os
+import re
 import json
 import urllib.request
 import urllib.error
 
 APP_URL = os.environ["APP_URL"]
 WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]
+
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
 
 
 def handler(event, context):
@@ -14,6 +17,10 @@ def handler(event, context):
             run_id = body["run_id"]
         except (KeyError, json.JSONDecodeError) as e:
             print(f"[ai-trigger] bad message: {e} — {record.get('body','')[:200]}")
+            continue
+
+        if not UUID_RE.match(str(run_id)):
+            print(f"[ai-trigger] invalid run_id format: {str(run_id)[:50]} — skipping")
             continue
 
         print(f"[ai-trigger] triggering suggest-transforms for run {run_id}")

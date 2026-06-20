@@ -234,7 +234,15 @@ def apply_document_transforms(text: str, rules: list[dict]) -> str:
                 pattern = params.get("pattern", "")
                 replacement = params.get("replacement", "[REDACTED]")
                 if pattern:
-                    text = re.sub(pattern, str(replacement), text)
+                    # ReDoS protection: validate regex compiles and cap length
+                    if len(pattern) > 200:
+                        print(f"[executor] redact_pattern too long ({len(pattern)} chars), skipping")
+                    else:
+                        try:
+                            compiled = re.compile(pattern)
+                            text = compiled.sub(str(replacement), text)
+                        except re.error as regex_err:
+                            print(f"[executor] invalid redact_pattern regex: {regex_err}")
 
             elif rtype == "ner_redact":
                 entities   = params.get("entities", ["PERSON", "ORG", "GPE", "DATE"])
