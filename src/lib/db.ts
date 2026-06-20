@@ -205,4 +205,34 @@ export async function withTransaction<T>(
   }
 }
 
-export default { query, queryOne, withTransaction };
+/**
+ * Run a single query with RLS team context.
+ * Sets app.team_id for the duration of the transaction so RLS policies apply.
+ * Use for all Clerk-authenticated list queries (pipeline list, run list, etc.)
+ */
+export async function queryWithTeam<T = unknown>(
+  teamId: string,
+  text: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  return withTransaction(async (txId) => {
+    // Set RLS context — local to this transaction
+    await query(
+      "SELECT set_config('app.team_id', $1, true)",
+      [teamId],
+      txId
+    );
+    return query<T>(text, params, txId);
+  });
+}
+
+export async function queryOneWithTeam<T = unknown>(
+  teamId: string,
+  text: string,
+  params: unknown[] = []
+): Promise<T | null> {
+  const rows = await queryWithTeam<T>(teamId, text, params);
+  return rows[0] ?? null;
+}
+
+export default { query, queryOne, queryWithTeam, queryOneWithTeam, withTransaction };

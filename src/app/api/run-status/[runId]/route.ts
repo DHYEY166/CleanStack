@@ -1,6 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-import { queryOne } from "@/lib/db";
+import { queryOneWithTeam } from "@/lib/db";
 
 export async function GET(
   _req: NextRequest,
@@ -12,7 +12,7 @@ export async function GET(
   const { runId } = await params;
 
   try {
-    const run = await queryOne<{
+    const run = await queryOneWithTeam<{
       id: string;
       status: string;
       pipeline_id: string;
@@ -21,6 +21,7 @@ export async function GET(
       row_count_processed: number | null;
       auto_mode: boolean;
     }>(
+      userId,
       `SELECT pr.id, pr.status, pr.pipeline_id, pr.error_message,
               pr.row_count_raw, pr.row_count_processed, pr.auto_mode
        FROM pipeline_runs pr
@@ -34,7 +35,8 @@ export async function GET(
     // If auto_mode and completed, look for a child run created by executor auto-iterate
     let child_run_id: string | null = null;
     if (run.auto_mode && run.status === "completed") {
-      const child = await queryOne<{ id: string }>(
+      const child = await queryOneWithTeam<{ id: string }>(
+        userId,
         "SELECT id FROM pipeline_runs WHERE parent_run_id = $1 ORDER BY created_at DESC LIMIT 1",
         [runId]
       );

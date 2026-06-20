@@ -1,6 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-import { query, queryOne } from "@/lib/db";
+import { query, queryOne, queryWithTeam } from "@/lib/db";
 import type { Pipeline } from "@/lib/types";
 
 export async function GET() {
@@ -8,7 +8,8 @@ export async function GET() {
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const pipelines = await query<Pipeline>(
+    const pipelines = await queryWithTeam<Pipeline>(
+      userId,
       "SELECT * FROM pipelines WHERE team_id = $1 AND status != 'archived' ORDER BY created_at DESC",
       [userId]
     );
