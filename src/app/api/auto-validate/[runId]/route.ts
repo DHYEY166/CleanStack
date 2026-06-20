@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateText } from "ai";
+import { generateText, type LanguageModelUsage } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
@@ -58,7 +58,7 @@ async function runConsultant(
   systemPrompt: string,
   userPrompt: string,
   rules: TransformRule[]
-): Promise<{ votes: VoteResult[]; usage: { promptTokens: number; completionTokens: number } }> {
+): Promise<{ votes: VoteResult[]; usage: LanguageModelUsage }> {
   try {
     const result = await generateText({
       model: bedrock("us.anthropic.claude-sonnet-4-6"),
@@ -74,7 +74,7 @@ async function runConsultant(
       rule_id: r.id,
       vote: (RISK_THRESHOLDS[r.rule_type] ?? 2) <= 1 ? "APPROVE" : "REJECT" as const,
       reason: `${persona} unavailable`,
-    })), usage: { promptTokens: 0, completionTokens: 0 } };
+    })), usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } as unknown as LanguageModelUsage };
   }
 }
 
