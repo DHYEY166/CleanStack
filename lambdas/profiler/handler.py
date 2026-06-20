@@ -1,6 +1,17 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "package"))
 
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.aws_lambda import AwsLambdaIntegration
+    sentry_sdk.init(
+        dsn=os.environ.get("SENTRY_DSN", ""),
+        integrations=[AwsLambdaIntegration(timeout_warning=True)],
+        traces_sample_rate=0.1,
+    )
+except ImportError:
+    pass
+
 import json
 import io
 import re
