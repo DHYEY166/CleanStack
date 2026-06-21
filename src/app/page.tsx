@@ -39,7 +39,7 @@ const features = [
   {
     icon: Zap,
     title: "Serverless Execution",
-    description: "AWS Lambda runs transforms. Under $5/month for SME workloads vs $500+ for Fivetran.",
+    description: "AWS Lambda runs transforms. $49/month vs $500+ for Fivetran — same result, 10x cheaper.",
   },
   {
     icon: BellRing,
@@ -66,12 +66,12 @@ const steps = [
 ];
 
 const stats = [
-  { icon: DollarSign, value: "<$5", label: "per month at SME scale" },
-  { icon: Clock, value: "30s", label: "to first quality score" },
+  { icon: DollarSign, value: "$49", label: "Pro plan vs $500+/mo Fivetran" },
+  { icon: Clock, value: "2 min", label: "raw file to clean data" },
   { icon: ShieldCheck, value: "100%", label: "auditable transforms" },
 ];
 
-const trustedBy = ["Northwind", "Acme Data", "Lumen Co", "Vertex BI", "Cedar Labs", "Mercato"];
+const builtFor = ["Finance & Accounting", "E-commerce", "HR & Recruiting", "CRM & Sales", "Healthcare", "AI / ML Teams"];
 
 export default function LandingPage() {
   return (
@@ -126,7 +126,7 @@ export default function LandingPage() {
           </h1>
           <p className="text-lg sm:text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed text-pretty">
             Upload any data file, get AI-powered cleaning suggestions, approve them like a GitHub
-            PR, and watch your quality score jump — all for under $5/month.
+            PR, and watch your quality score jump — all without writing a line of code.
           </p>
           <div className="flex items-center justify-center gap-4 flex-wrap">
             <Link
@@ -154,11 +154,11 @@ export default function LandingPage() {
       <section className="max-w-2xl mx-auto px-6 mb-20">
         <div className="rounded-2xl border border-gray-800 bg-gradient-to-b from-gray-900 to-gray-900/40 p-6 sm:p-8 shadow-2xl shadow-indigo-950/30">
           <p className="text-xs uppercase tracking-wider text-gray-500 text-center mb-6">
-            Quality score · invoices_q3.csv
+            Quality score · customer_orders.csv · 405 rows
           </p>
           <div className="flex items-center justify-between flex-wrap gap-6">
             <div className="text-center flex-1 min-w-[80px]">
-              <div className="text-5xl font-bold text-red-400">42</div>
+              <div className="text-5xl font-bold text-red-400">68</div>
               <div className="text-sm text-gray-500 mt-1">Before</div>
             </div>
             <div className="flex flex-col items-center gap-1 text-gray-400">
@@ -166,24 +166,24 @@ export default function LandingPage() {
               <div className="text-xs text-indigo-400 font-medium whitespace-nowrap">Data PR approved</div>
             </div>
             <div className="text-center flex-1 min-w-[80px]">
-              <div className="text-5xl font-bold text-emerald-400">91</div>
+              <div className="text-5xl font-bold text-emerald-400">88</div>
               <div className="text-sm text-gray-500 mt-1">After</div>
             </div>
             <div className="text-center flex-1 min-w-[80px]">
-              <div className="text-2xl font-bold text-indigo-400">+49</div>
+              <div className="text-2xl font-bold text-indigo-400">+20</div>
               <div className="text-sm text-gray-500 mt-1">Improvement</div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Trusted by */}
+      {/* Built for */}
       <section className="max-w-5xl mx-auto px-6 pb-20">
         <p className="text-center text-xs uppercase tracking-wider text-gray-600 mb-6">
-          Trusted by data teams at
+          Built for data teams in
         </p>
         <div className="flex flex-wrap items-center justify-center gap-x-10 gap-y-4">
-          {trustedBy.map((name) => (
+          {builtFor.map((name) => (
             <span key={name} className="text-lg font-semibold text-gray-600 hover:text-gray-400 transition-colors">
               {name}
             </span>
