@@ -377,8 +377,7 @@ cleanstack/
 
 H0 — Hack the Zero Stack Hackathon (June 2026)  
 Track: B2B SaaS  
-Required integrations: Vercel + Amazon Aurora PostgreSQL  
-Vercel Team ID: `team_3pfhz8jPHgRWWRVVOxPanm9I`
+Required integrations: Vercel + Amazon Aurora PostgreSQL
 
 ---
 
