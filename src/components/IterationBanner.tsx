@@ -87,7 +87,7 @@ export default function IterationBanner({
           </span>
           {autoMode && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-purple-400/20 text-purple-400">
-              ⚡ Auto-cleaned
+              <span aria-hidden="true">⚡</span> Auto-cleaned
             </span>
           )}
         </div>
@@ -114,7 +114,7 @@ export default function IterationBanner({
           disabled={loading}
           className="px-4 py-2 rounded-lg text-sm font-medium transition-colors flex-shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {loading ? "Starting…" : "⚡ Auto-Clean Remaining →"}
+          {loading ? "Starting…" : <><span aria-hidden="true">⚡</span> Auto-Clean Remaining →</>}
         </button>
       )}
     </div>

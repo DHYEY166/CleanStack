@@ -18,18 +18,20 @@ function GaugeSVG({ score }: { score: number }) {
 
   useEffect(() => {
     let start: number | null = null;
+    let rafId: number;
     const duration = 900;
     const target = score;
 
     function step(ts: number) {
       if (!start) start = ts;
       const progress = Math.min((ts - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
       setDisplayed(Math.round(eased * target));
-      if (progress < 1) requestAnimationFrame(step);
+      if (progress < 1) rafId = requestAnimationFrame(step);
     }
 
-    requestAnimationFrame(step);
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
   }, [score]);
 
   const radius = 54;
