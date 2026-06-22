@@ -16,6 +16,8 @@ export default function RunStatusPoller({
   pipelineId?: string;
 }) {
   const router = useRouter();
+  const routerRef = useRef(router);
+  routerRef.current = router;
   const statusRef = useRef(currentStatus);
   const attemptRef = useRef(0);
 
@@ -35,11 +37,11 @@ export default function RunStatusPoller({
           statusRef.current = run.status;
 
           if (run.status === "completed" && child_run_id && pipelineId) {
-            router.push(`/pipelines/${pipelineId}/runs/${child_run_id}`);
+            routerRef.current.push(`/pipelines/${pipelineId}/runs/${child_run_id}`);
             return;
           }
 
-          router.refresh();
+          routerRef.current.refresh();
         }
 
         if (TERMINAL.has(run.status)) return;
@@ -57,7 +59,9 @@ export default function RunStatusPoller({
 
     schedule();
     return () => clearTimeout(timeoutId);
-  }, [runId, currentStatus, pipelineId, router]);
+  // router excluded from deps — stable ref via routerRef prevents stale closure + multiple poll loops
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, currentStatus, pipelineId]);
 
   return null;
 }

@@ -40,7 +40,7 @@ const tiers = [
     price: "$49",
     period: "per month",
     description: "For growing teams with real data pipelines.",
-    cta: "Start Pro trial",
+    cta: "Start for free",
     ctaHref: "/sign-up",
     highlighted: true,
     included: "1,000,000 rows / month included",
@@ -68,7 +68,7 @@ const tiers = [
     period: "per month",
     description: "For data teams running GB-scale pipelines in production.",
     cta: "Contact sales",
-    ctaHref: "mailto:dvdesai06@gmail.com",
+    ctaHref: "/sign-up",
     highlighted: false,
     included: "10,000,000 rows / month included",
     overage: "$0.30 per 100K rows after that",
@@ -91,7 +91,7 @@ const tiers = [
 const faqs = [
   {
     q: "How does row-based billing work?",
-    a: "Each plan includes a monthly row quota. Rows are counted from the raw input file per pipeline run. If you stay within your quota, you pay only the base fee. If you exceed it, overage is billed at the per-100K rate shown on your plan — automatically calculated at the end of each billing cycle via Stripe.",
+    a: "Each plan includes a monthly row quota. Rows are counted from the raw input file per pipeline run. If you stay within your quota, you pay only the base fee. If you exceed it, overage is charged at the per-100K rate shown on your plan.",
   },
   {
     q: "What counts as a pipeline run?",
@@ -99,7 +99,7 @@ const faqs = [
   },
   {
     q: "Will I get a surprise bill?",
-    a: "Free plan has a hard row cap — no overage, no surprises. Pro and Team plans show a real-time usage meter in your dashboard. You can set a spend cap to automatically pause processing when you hit a limit.",
+    a: "Free plan has a hard row cap — no overage, no surprises. Pro and Team plans show a real-time usage meter in your dashboard so you always know where you stand.",
   },
   {
     q: "Which AWS services does CleanStack use under the hood?",
@@ -110,8 +110,8 @@ const faqs = [
     a: "Team plan customers can request a bring-your-own-cloud deployment. Contact sales for details.",
   },
   {
-    q: "Is there a free trial for Pro?",
-    a: "Yes — 14 days free, no credit card required.",
+    q: "Is there a free tier?",
+    a: "Yes — the Free plan gives you 50,000 rows/month at no cost, forever. No credit card required. Upgrade to Pro when you need more.",
   },
 ];
 

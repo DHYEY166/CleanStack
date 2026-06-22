@@ -407,8 +407,9 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                     elif target == "str":
                         df[col] = df[col].astype(str)
                     elif target in ("datetime", "date", "timestamp"):
-                        df[col] = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
-                        df[col] = df[col].dt.strftime("%Y-%m-%d")
+                        parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
+                        # Replace NaT with None (null) not string "NaT"
+                        df[col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), other=None)
                     else:
                         df[col] = df[col].astype(target, errors="ignore")
 
@@ -606,16 +607,7 @@ def _maybe_auto_iterate(cur, conn, s3_client, run_id, pipeline_id, raw_s3_key, f
     """Check improvement vs parent and create next pass if warranted."""
     import uuid as _uuid
     try:
-        # Get parent processed score
-        cur.execute(
-            """SELECT dp.quality_score FROM data_profiles dp
-               JOIN pipeline_runs pr ON pr.parent_run_id IS NOT NULL AND pr.id = %s
-               JOIN data_profiles dp2 ON dp2.run_id = pr.parent_run_id AND dp2.stage = 'processed'
-               WHERE dp.run_id = %s AND dp.stage = 'raw'
-               LIMIT 1""",
-            (run_id, run_id)
-        )
-        # Simpler: fetch parent_run_id from run, then get its processed score
+        # Fetch parent_run_id, then get its processed quality score
         cur.execute("SELECT parent_run_id FROM pipeline_runs WHERE id = %s", (run_id,))
         parent_row = cur.fetchone()
         if not parent_row or not parent_row[0]:
@@ -666,7 +658,9 @@ def _maybe_auto_iterate(cur, conn, s3_client, run_id, pipeline_id, raw_s3_key, f
         print(f"[executor] Auto-iterate: created pass {iteration+1} run {new_run_id}")
 
     except Exception as e:
-        print(f"[executor] Auto-iterate error (non-fatal): {e}")
+        import traceback
+        print(f"[executor] Auto-iterate error (non-fatal, run {run_id}): {e}")
+        print(traceback.format_exc())
         # Don't raise — auto-iterate failure must not fail the current run
 
 
@@ -829,23 +823,22 @@ def handler(event, context):
         )
         conn.commit()
 
-        # M7: Delete raw file after successful processing if auto_delete_raw=True
-        if auto_delete_raw:
-            try:
-                raw_bucket = os.environ["S3_RAW_BUCKET"]
-                s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
-                print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
-            except Exception as del_err:
-                print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
-
         # Schema drift detection — tabular only
         if run_mode == "document":
-            # Auto-iterate for document mode
+            # Auto-iterate for document mode — copy raw file BEFORE deleting it
             if auto_mode and iteration < 3:
                 _maybe_auto_iterate(
                     cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
                     processed_key, iteration, profile["quality_score"]
                 )
+            # Delete raw file AFTER auto-iterate has copied it (if applicable)
+            if auto_delete_raw:
+                try:
+                    raw_bucket = os.environ["S3_RAW_BUCKET"]
+                    s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
+                    print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
+                except Exception as del_err:
+                    print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
             return {"statusCode": 200, "run_id": run_id}
 
         new_hash, col_defs = schema_hash(df)
@@ -880,12 +873,21 @@ def handler(event, context):
                     }),
                 )
 
-        # Auto-iterate for tabular mode
+        # Auto-iterate for tabular mode — copy raw file BEFORE deleting it
         if auto_mode and iteration < 3:
             _maybe_auto_iterate(
                 cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
                 processed_key, iteration, profile["quality_score"]
             )
+
+        # Delete raw file AFTER auto-iterate has copied it (if applicable)
+        if auto_delete_raw:
+            try:
+                raw_bucket = os.environ["S3_RAW_BUCKET"]
+                s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
+                print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
+            except Exception as del_err:
+                print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
 
     except Exception as e:
         conn.rollback()
