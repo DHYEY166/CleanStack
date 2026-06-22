@@ -279,10 +279,10 @@ export default function LandingPage() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { name: "HubSpot CRM Cleaner", cat: "CRM", uses: 142, color: "text-blue-400 bg-blue-400/10" },
-              { name: "E-commerce Orders", cat: "E-commerce", uses: 98, color: "text-emerald-400 bg-emerald-400/10" },
-              { name: "Finance Report Normalizer", cat: "Finance", uses: 76, color: "text-yellow-400 bg-yellow-400/10" },
-              { name: "HR Roster Cleaner", cat: "HR", uses: 54, color: "text-purple-400 bg-purple-400/10" },
+              { name: "HubSpot CRM Cleaner", cat: "CRM", desc: "Deduplicate, normalize, fill missing fields", color: "text-blue-400 bg-blue-400/10" },
+              { name: "E-commerce Orders", cat: "E-commerce", desc: "Currency, dates, status normalization", color: "text-emerald-400 bg-emerald-400/10" },
+              { name: "Finance Report Normalizer", cat: "Finance", desc: "Amounts, accounts, encoding repair", color: "text-yellow-400 bg-yellow-400/10" },
+              { name: "HR Roster Cleaner", cat: "HR", desc: "IDs, salary, deduplication, manager fields", color: "text-purple-400 bg-purple-400/10" },
             ].map((t) => (
               <Link
                 key={t.name}
@@ -293,7 +293,7 @@ export default function LandingPage() {
                 <div className="text-white text-sm font-medium mt-3 mb-1 group-hover:text-indigo-300 transition-colors">
                   {t.name}
                 </div>
-                <div className="text-gray-500 text-xs">{t.uses} uses</div>
+                <div className="text-gray-500 text-xs">{t.desc}</div>
               </Link>
             ))}
           </div>

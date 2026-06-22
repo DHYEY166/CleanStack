@@ -21,8 +21,9 @@ CREATE TABLE IF NOT EXISTS pipelines (
 CREATE TABLE IF NOT EXISTS pipeline_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   pipeline_id UUID REFERENCES pipelines(id) ON DELETE CASCADE,
-  status TEXT DEFAULT 'pending',
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending','profiling','awaiting_ai','queued','running','completed','failed','awaiting_approval')),
   file_format TEXT,
+  mode TEXT DEFAULT 'tabular',
   raw_s3_key TEXT NOT NULL,
   processed_s3_key TEXT,
   row_count_raw INTEGER,
@@ -114,7 +115,7 @@ CREATE TABLE IF NOT EXISTS pipeline_destinations (
 CREATE TABLE IF NOT EXISTS subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   team_id TEXT NOT NULL UNIQUE,
-  plan TEXT NOT NULL DEFAULT 'free',
+  plan TEXT NOT NULL DEFAULT 'free' CHECK (plan IN ('free','pro','team','enterprise')),
   status TEXT NOT NULL DEFAULT 'active',
   stripe_customer_id TEXT,
   stripe_subscription_id TEXT,
