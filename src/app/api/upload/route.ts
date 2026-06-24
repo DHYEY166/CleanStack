@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
-  const quota = await getCachedQuota(userId, email);
+  const quota = await getCachedQuota(userId, email, userId);
   if (quota.blocked) {
     return NextResponse.json(
       {

@@ -76,10 +76,9 @@ const tiers = [
       "10,000,000 rows / month included",
       "$0.30 per 100K rows overage",
       "Unlimited pipeline runs",
-      "REST API access",
       "Custom output destinations (S3, webhooks)",
-      "Audit log export",
-      "Schema snapshot history (90 days)",
+      "Full audit trail (approval history, who approved what)",
+      "Schema snapshot history",
       "10 users",
       "Priority support (4h SLA)",
       "Dedicated Slack channel",
@@ -107,7 +106,7 @@ const faqs = [
   },
   {
     q: "Can I use my own AWS account?",
-    a: "Team plan customers can request a bring-your-own-cloud deployment. Contact sales for details.",
+    a: "Bring-your-own-cloud deployment is on the roadmap for Enterprise customers. Contact us to discuss your infrastructure requirements.",
   },
   {
     q: "Is there a free tier?",
@@ -270,9 +269,9 @@ export default function PricingPage() {
                   ["Schema drift alerts", "—", "✓", "✓"],
                   ["Slack / email alerts", "—", "✓", "✓"],
                   ["Conversational builder", "—", "✓", "✓"],
-                  ["REST API access", "—", "—", "✓"],
                   ["Custom destinations", "—", "—", "✓"],
-                  ["Audit log export", "—", "—", "✓"],
+                  ["Audit trail", "—", "✓", "✓"],
+                  ["Schema snapshots", "—", "✓", "✓"],
                   ["Users", "1", "3", "10"],
                   ["Support", "Community", "Email", "Priority (4h SLA)"],
                 ].map(([feature, free, pro, team], i) => {

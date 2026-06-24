@@ -1,8 +1,6 @@
 import { Redis } from "@upstash/redis";
 import { checkQuota, type QuotaResult } from "@/lib/billing";
 
-// Upstash Redis — HTTP-based, works from Vercel without VPC
-// Falls back to direct DB if Redis unavailable
 let redis: Redis | null = null;
 try {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
@@ -19,24 +17,30 @@ const QUOTA_TTL = 60; // seconds
 
 export async function getCachedQuota(
   teamId: string,
-  email?: string | null
+  email?: string | null,
+  userId?: string | null
 ): Promise<QuotaResult> {
-  if (!redis) return checkQuota(teamId, email);
+  // Admin check bypasses cache entirely — must use live userId check
+  if (!redis) return checkQuota(teamId, email, userId);
 
   const key = `quota:${teamId}`;
   try {
     const cached = await redis.get<QuotaResult>(key);
-    if (cached) return cached;
+    // Don't use cache for admins — their bypass depends on userId which cache doesn't store
+    if (cached && !cached.isAdmin) return cached;
   } catch {
     // Redis error — fall through to DB
   }
 
-  const result = await checkQuota(teamId, email);
+  const result = await checkQuota(teamId, email, userId);
 
-  try {
-    await redis.setex(key, QUOTA_TTL, JSON.stringify(result));
-  } catch {
-    // Cache write failed — fine, just return the result
+  // Only cache non-admin results
+  if (!result.isAdmin) {
+    try {
+      await redis.setex(key, QUOTA_TTL, JSON.stringify(result));
+    } catch {
+      // Cache write failed — fine, just return the result
+    }
   }
 
   return result;

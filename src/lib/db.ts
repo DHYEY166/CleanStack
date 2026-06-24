@@ -61,9 +61,15 @@ function toParam(value: unknown): { field: Field; typeHint?: TypeHint } {
     // Aurora Data API requires PostgreSQL format "YYYY-MM-DD HH:MM:SS.fff", not ISO 8601
     return { field: { stringValue: toTimestampStr(new Date(str)) }, typeHint: "TIMESTAMP" };
   }
-  // Pre-stringified JSONB values — callers that do JSON.stringify() before passing
+  // Pre-stringified JSONB values — only add typeHint if string is actually valid JSON
+  // Prevents "[REDACTED]" or other bracket-starting strings from getting JSON typeHint
   if (str.length > 0 && (str[0] === "{" || str[0] === "[")) {
-    return { field: { stringValue: str }, typeHint: "JSON" };
+    try {
+      JSON.parse(str);
+      return { field: { stringValue: str }, typeHint: "JSON" };
+    } catch {
+      // Not valid JSON — treat as plain string
+    }
   }
   return { field: { stringValue: str } };
 }

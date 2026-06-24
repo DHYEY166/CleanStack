@@ -9,7 +9,7 @@ export async function GET() {
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
-  const quota = await getCachedQuota(userId, email);
+  const quota = await getCachedQuota(userId, email, userId);
 
   const percentage =
     quota.isAdmin || quota.includedRows === Infinity
