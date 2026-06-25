@@ -15,6 +15,7 @@ const isProtectedRoute = createRouteMatcher([
   "/api/usage(.*)",
   "/api/runs(.*)",
   "/api/export-training(.*)",
+  "/api/account(.*)",
 ]);
 
 const isRootPath = createRouteMatcher(["/"]);

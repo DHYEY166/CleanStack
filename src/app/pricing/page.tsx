@@ -20,17 +20,15 @@ const tiers = [
     overage: null,
     features: [
       "50,000 rows / month (hard cap)",
-      "5 pipeline runs / month",
-      "CSV, JSON, Excel formats",
-      "AI quality profiling",
+      "CSV, JSON, Excel, PDF, DOCX formats",
+      "AI quality profiling + transform rules",
       "Community templates",
-      "1 user",
+      "Data PR approval workflow",
     ],
     missing: [
       "Row overage",
       "Schema drift alerts",
       "Slack / email notifications",
-      "API access",
       "Custom destinations",
       "Priority support",
     ],
@@ -54,10 +52,8 @@ const tiers = [
       "Full template marketplace",
       "Schema drift alerts",
       "Slack + email notifications",
-      "3 users",
     ],
     missing: [
-      "API access",
       "Custom destinations",
       "Priority support",
     ],
@@ -79,8 +75,7 @@ const tiers = [
       "Custom output destinations (S3, webhooks)",
       "Full audit trail (approval history, who approved what)",
       "Schema snapshot history",
-      "10 users",
-      "Priority support (4h SLA)",
+      "Priority support",
       "Dedicated Slack channel",
     ],
     missing: [],
@@ -273,7 +268,7 @@ export default function PricingPage() {
                   ["Audit trail", "—", "✓", "✓"],
                   ["Schema snapshots", "—", "✓", "✓"],
                   ["Users", "1", "3", "10"],
-                  ["Support", "Community", "Email", "Priority (4h SLA)"],
+                  ["Support", "Community", "Email", "Priority"],
                 ].map(([feature, free, pro, team], i) => {
                   const renderCell = (value: string) => {
                     if (value === "✓")
@@ -315,7 +310,7 @@ export default function PricingPage() {
         {/* CTA banner */}
         <div className="relative overflow-hidden rounded-2xl border border-indigo-500/30 bg-gradient-to-b from-indigo-600/15 to-gray-900/20 p-10 text-center">
           <h2 className="text-3xl font-bold tracking-tight text-white mb-3 text-balance">Start cleaning data today</h2>
-          <p className="text-gray-400 mb-8 text-pretty">No credit card required. 5 free pipeline runs every month.</p>
+          <p className="text-gray-400 mb-8 text-pretty">No credit card required. 50,000 rows free every month.</p>
           <Link
             href="/sign-up"
             className="group inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-3 rounded-lg font-medium transition-colors"

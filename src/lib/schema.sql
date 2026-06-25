@@ -132,3 +132,16 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status);
 CREATE INDEX IF NOT EXISTS idx_transform_rules_run_id ON transform_rules(run_id);
 CREATE INDEX IF NOT EXISTS idx_data_profiles_run_id ON data_profiles(run_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_team_id ON subscriptions(team_id);
+
+-- Composite indexes for hot-path queries (also applied via 001_indexes.sql migration)
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_created
+  ON pipeline_runs (pipeline_id, created_at) WHERE iteration = 1;
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_active_status
+  ON pipeline_runs (status, created_at)
+  WHERE status IN ('profiling', 'awaiting_ai', 'queued', 'running');
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_parent_run_id
+  ON pipeline_runs (parent_run_id) WHERE parent_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transform_rules_run_status
+  ON transform_rules (run_id, status);
+CREATE INDEX IF NOT EXISTS idx_data_profiles_run_stage
+  ON data_profiles (run_id, stage);

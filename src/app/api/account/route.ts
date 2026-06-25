@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, DeleteObjectsCommand } from "@aws-sdk/client-s3";
-import { query, queryOne } from "@/lib/db";
+import { query, queryOne, withTransaction } from "@/lib/db";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
@@ -58,21 +58,24 @@ export async function DELETE(req: NextRequest) {
       })).catch((e) => console.error("[DELETE /api/account] S3 processed delete failed:", e));
     }
 
-    // Delete pipelines — ON DELETE CASCADE removes runs, profiles, rules, reviews, snapshots
-    const deleted = await queryOne<{ count: string }>(
-      `WITH deleted AS (
-         DELETE FROM pipelines WHERE team_id = $1 RETURNING id
-       ) SELECT COUNT(*)::text AS count FROM deleted`,
-      [userId]
-    );
-
-    await query("DELETE FROM subscriptions WHERE team_id = $1", [userId]);
-    await query("DELETE FROM bedrock_usage WHERE team_id = $1", [userId]);
-    await query("DELETE FROM ai_spend_limits WHERE team_id = $1", [userId]);
+    // Delete all DB rows atomically — pipelines CASCADE removes runs/profiles/rules/reviews/snapshots
+    const deleted = await withTransaction(async (txId) => {
+      const result = await queryOne<{ count: string }>(
+        `WITH deleted AS (
+           DELETE FROM pipelines WHERE team_id = $1 RETURNING id
+         ) SELECT COUNT(*)::text AS count FROM deleted`,
+        [userId],
+        txId
+      );
+      await query("DELETE FROM subscriptions WHERE team_id = $1", [userId], txId);
+      await query("DELETE FROM bedrock_usage WHERE team_id = $1", [userId], txId);
+      await query("DELETE FROM ai_spend_limits WHERE team_id = $1", [userId], txId);
+      return result;
+    });
 
     return NextResponse.json({
       ok: true,
-      deleted_pipelines: Number(deleted?.count ?? 0),
+      deleted_pipelines: Number((deleted as { count: string } | null)?.count ?? 0),
       deleted_raw_s3: rawKeys.length,
       deleted_processed_s3: procKeys.length,
       message: "All account data permanently deleted.",
