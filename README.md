@@ -64,9 +64,10 @@ S3 Raw Bucket (SSE-KMS encrypted, versioning enabled)
          │  S3 PUT event
          ▼
 AWS Lambda — Profiler (Python 3.12)
-  • Parses 9 file formats (CSV, Excel, JSON, XML, Parquet, PDF, DOCX...)
-  • Column-level stats: null %, duplicates, type mismatches, outliers, sentinel values
+  • Parses 9 file formats (CSV, Excel, JSON, XML, Parquet, PDF, DOCX...) with magic byte detection, chardet encoding, BOM strip
+  • Column-level stats: null %, duplicates, type mismatches, outliers, 50+ sentinel values
   • Quality score 0–100
+  • Signal detection: 7 categories (ffill candidates, outliers, boolean cols, multi-currency, split candidates, messy headers, numeric locale) stored in column_stats JSONB
   • Writes data_profiles to Aurora PostgreSQL
   • POSTs to /api/webhooks/profile-complete
          │
@@ -96,7 +97,7 @@ AWS SQS — cleanstack-jobs queue
          ▼
 AWS Lambda — Executor (Python 3.12)
   • Reads approved rules from Aurora
-  • Applies transforms via pandas (16 rule types)
+  • Applies transforms via pandas (25 rule types)
   • Row count safety guard: >10% loss in auto_mode → abort
   • Writes processed file to S3 Processed Bucket
   • Re-profiles output, updates Aurora with new quality score
@@ -290,25 +291,45 @@ aws lambda update-function-code \
 
 ## Supported Transform Rules
 
+Rules are gate-controlled: AI only suggests a rule if signal detection in the profiler confirms the relevant pattern is present in the data.
+
+### Tabular Rules
+
+| Rule | Risk | Description |
+|------|------|-------------|
+| `trim_whitespace` | SAFE | Strip leading/trailing whitespace from string columns |
+| `deduplicate` | LOSS | Remove exact duplicate rows |
+| `semantic_deduplicate` | LOSS | Remove near-duplicate rows using MinHash similarity |
+| `fill_nulls` | SYNTHETIC | Fill missing values (mean / median / mode / constant) |
+| `drop_nulls` | LOSS | Drop rows exceeding null threshold |
+| `type_cast` | MUTATION | Convert column to float / int / datetime / str |
+| `normalize` | SAFE | Standardize date formats (→ YYYY-MM-DD) and lowercase strings |
+| `filter` | LOSS | Remove rows matching condition (gt / lt / eq / neq / notnull) |
+| `filter_extended` | LOSS | Extended filter: gte / lte / contains / regex / in / startswith / endswith |
+| `rename` | SAFE | Rename column to snake_case |
+| `ner_redact` | MUTATION | Redact named entities (PERSON, ORG, GPE, DATE, IP) |
+| `ffill` | SYNTHETIC | Forward-fill nulls from prior row — signal-gated, sidecar `__orig_*` preserved |
+| `bfill` | SYNTHETIC | Backward-fill nulls from next row — signal-gated, sidecar `__orig_*` preserved |
+| `bool_cast` | SAFE | Normalize true/false/yes/no/1/0 variants to bool/int/str |
+| `outlier_cap` | MUTATION | IQR-based outlier capping — signal-gated, sidecar preserved |
+| `multi_currency_strip` | MUTATION | Strip mixed currency symbols ($€£¥₹₩) and convert to float — >50% parse guard |
+| `split_column` | SAFE | Split column on delimiter into new columns, source preserved |
+| `column_header_normalize` | SAFE | snake_case all column names — signal-gated on messy headers |
+| `parquet_write` | SAFE | Output as Parquet format instead of native input format |
+
+### Document Rules
+
 | Rule | Description |
 |------|-------------|
-| `trim_whitespace` | Strip leading/trailing whitespace from string columns |
-| `deduplicate` | Remove exact duplicate rows |
-| `semantic_deduplicate` | Remove near-duplicate rows using MinHash similarity |
-| `fill_nulls` | Fill missing values (mean / median / mode / constant) |
-| `drop_nulls` | Drop rows exceeding null threshold |
-| `type_cast` | Convert column to float / int / datetime / str |
-| `normalize` | Standardize date formats (→ YYYY-MM-DD) and lowercase strings |
-| `filter` | Remove rows matching condition (gt / lt / eq / neq / notnull) |
-| `rename` | Rename column to snake_case |
-| `ner_redact` | Redact named entities (PERSON, ORG, GPE, DATE, IP) |
 | `strip_pii` | Remove emails, phones, SSNs, credit card numbers |
 | `fix_encoding` | Repair corrupted unicode characters |
-| `remove_headers_footers` | Strip repeated page headers/footers from documents |
-| `remove_blank_lines` | Remove excessive blank lines from documents |
+| `remove_headers_footers` | Strip repeated page headers/footers |
+| `remove_blank_lines` | Remove excessive blank lines |
 | `normalize_whitespace` | Collapse irregular spacing in document text |
 | `strip_html` | Remove HTML tags from text |
-| `redact_pattern` | Redact custom regex pattern (length-capped, validated) |
+| `redact_pattern` | Redact custom regex pattern (length-capped at 200 chars, validated) |
+
+**Data integrity safeguards:** SYNTHETIC fills require `synthetic_fill: true` in parameters and "⚠ SYNTHETIC" in AI reasoning. MUTATION rules write `__orig_{col}` sidecar columns. LOSS rules are capped at 20% row loss per rule (restores if exceeded).
 
 ---
 
