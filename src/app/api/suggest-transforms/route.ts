@@ -393,9 +393,7 @@ ${isSubsequentPass ? `
    c. Explain WHY the synthetic fill is appropriate for this specific column
 5. NEVER invent data. Only suggest transforms for issues actually visible in the profile.
 
-## SIGNAL GATE
-${signalGate(signals)}
-
+${!isSubsequentPass ? `## SIGNAL GATE\n${signalGate(signals)}\n` : ""}
 ## DATASET OVERVIEW
 - Quality score      : ${profile.quality_score}/100
 - Total rows         : ${profile.total_rows}

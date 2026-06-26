@@ -322,11 +322,13 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
     dup_count = df.duplicated().sum()
     dup_pct   = round(dup_count / max(total_rows, 1) * 100, 2)
 
+    # keep_default_na=False: empty cells are "" not NaN — exclude them before type-mismatch check
     type_mismatches = 0
     for col in df.columns:
         if df[col].dtype == object:
-            numeric_count = pd.to_numeric(df[col], errors="coerce").notna().sum()
-            if 0 < numeric_count < len(df[col]):
+            non_empty = df[col][df[col].astype(str).str.strip() != ""]
+            numeric_count = pd.to_numeric(non_empty, errors="coerce").notna().sum()
+            if 0 < numeric_count < len(non_empty):
                 type_mismatches += 1
 
     # dtype=str: coerce object cols to numeric before outlier detection
@@ -442,15 +444,19 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     DATETIME_HINTS = ("date", "time", "created", "updated", "timestamp", "period",
                       "month", "year", "day")
     date_cols = [c for c in df.columns if any(h in str(c).lower() for h in DATETIME_HINTS)]
+    # keep_default_na=False: empty CSV cells are "" not NaN — count both as null
+    def _effective_null_pct(s: pd.Series) -> float:
+        return (s.isnull() | (s.astype(str).str.strip() == "")).mean()
+
     ffill_cols = []
     for col in date_cols:
-        null_pct = df[col].isnull().mean()
+        null_pct = _effective_null_pct(df[col])
         if 0.01 < null_pct < 0.60:
             ffill_cols.append(col)
     for col in df.select_dtypes(include="object").columns:
         if col in ffill_cols:
             continue
-        null_pct = df[col].isnull().mean()
+        null_pct = _effective_null_pct(df[col])
         if 0.01 < null_pct < 0.40 and any(h in str(col).lower() for h in DATETIME_HINTS):
             ffill_cols.append(col)
     signals["has_ffill_candidate"] = len(ffill_cols) > 0
