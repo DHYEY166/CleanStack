@@ -329,11 +329,16 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
             if 0 < numeric_count < len(df[col]):
                 type_mismatches += 1
 
+    # dtype=str: coerce object cols to numeric before outlier detection
     outlier_count = 0
-    for col in df.select_dtypes(include=[np.number]).columns:
-        q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+    for col in df.columns:
+        _num = pd.to_numeric(df[col], errors="coerce") if df[col].dtype == object else df[col]
+        if _num.notna().sum() < max(len(_num) * 0.5, 2):
+            continue
+        q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
         iqr = q3 - q1
-        outlier_count += int(df[(df[col] < q1 - 1.5 * iqr) | (df[col] > q3 + 1.5 * iqr)][col].count())
+        if iqr > 0:
+            outlier_count += int(((_num < q1 - 1.5 * iqr) | (_num > q3 + 1.5 * iqr)).sum())
 
     # Sentinel and whitespace — dataset-level aggregates
     total_sentinel_count = 0
@@ -355,14 +360,16 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
             ],
         }
 
-        if pd.api.types.is_numeric_dtype(series):
-            col_stat["min"] = float(series.min()) if not series.empty else None
-            col_stat["max"] = float(series.max()) if not series.empty else None
-            # Outlier examples
-            q1, q3 = series.quantile(0.25), series.quantile(0.75)
+        # dtype=str: try numeric coercion for min/max/outlier stats
+        _num_series = series if pd.api.types.is_numeric_dtype(series) else pd.to_numeric(series, errors="coerce")
+        if _num_series.notna().sum() >= max(len(_num_series) * 0.5, 2):
+            col_stat["min"] = float(_num_series.min()) if not _num_series.empty else None
+            col_stat["max"] = float(_num_series.max()) if not _num_series.empty else None
+            q1, q3 = _num_series.quantile(0.25), _num_series.quantile(0.75)
             iqr = q3 - q1
-            outliers = series[(series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)]
-            col_stat["outlier_examples"] = [float(v) for v in outliers.head(3).tolist()]
+            if iqr > 0:
+                outliers = _num_series[(_num_series < q1 - 1.5 * iqr) | (_num_series > q3 + 1.5 * iqr)]
+                col_stat["outlier_examples"] = [float(v) for v in outliers.head(3).tolist()]
 
         if series.dtype == object:
             str_series = series.astype(str).str.strip().str.lower()
@@ -451,13 +458,16 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     signals["ffill_confidence"] = min(len(ffill_cols) * 0.3, 1.0)
 
     # ── outlier signal ────────────────────────────────────────────────────────
+    # dtype=str: coerce object cols to numeric before IQR analysis
     outlier_cols = []
-    for col in df.select_dtypes(include="number").columns:
-        q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+    for col in df.columns:
+        _num = pd.to_numeric(df[col], errors="coerce") if df[col].dtype == object else df[col]
+        if _num.notna().sum() < max(len(_num) * 0.5, 2):
+            continue
+        q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
         iqr = q3 - q1
         if iqr > 0:
-            outlier_count = ((df[col] < q1 - 1.5 * iqr) | (df[col] > q3 + 1.5 * iqr)).sum()
-            if outlier_count > 0:
+            if ((_num < q1 - 1.5 * iqr) | (_num > q3 + 1.5 * iqr)).sum() > 0:
                 outlier_cols.append(col)
     signals["has_outliers"] = len(outlier_cols) > 0
     signals["outlier_cols"] = outlier_cols
