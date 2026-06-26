@@ -27,6 +27,11 @@ const RISK_THRESHOLDS: Record<string, number> = {
   normalize_whitespace: 1,
   remove_blank_lines: 1,
   strip_html: 1,
+  // Phase C LOW — additive/representation changes only
+  split_column: 1,           // additive: creates new columns, source preserved
+  column_header_normalize: 1, // rename only, data values unchanged
+  parquet_write: 1,          // output format change only
+  bool_cast: 1,              // deterministic: maps known boolean strings only
   // MEDIUM — 2 of 3
   type_cast: 2,
   deduplicate: 2,
@@ -34,10 +39,17 @@ const RISK_THRESHOLDS: Record<string, number> = {
   ner_redact: 2,
   strip_pii: 2,
   redact_pattern: 2,
+  // Phase C MEDIUM — SYNTHETIC fills (copy/infer values)
+  ffill: 2,                  // SYNTHETIC: copies prior row value into nulls
+  bfill: 2,                  // SYNTHETIC: copies next row value into nulls
+  outlier_cap: 2,            // MUTATION: clips real values to IQR fence
   // HIGH — 3 of 3 (unanimous)
   drop_nulls: 3,
   filter: 3,
   remove_headers_footers: 3,
+  // Phase C HIGH — MUTATION with potential data loss
+  multi_currency_strip: 3,   // MUTATION: removes currency symbols; could corrupt non-currency cols
+  filter_extended: 3,        // LOSS: same risk tier as filter
 };
 
 interface VoteResult {
@@ -156,6 +168,12 @@ Include a vote for every rule_id listed. No extra text.`;
     runConsultant(
       "SafetyAuditor",
       `You are a Data Safety Auditor. Your job: review proposed data cleaning rules for a dataset that has ALREADY been partially cleaned in a previous pass. Be strict about rules that delete or drop rows — require strong justification. Approve safe transformations freely.
+
+IRREVERSIBLE RULE WARNING:
+Rules tagged as SYNTHETIC (ffill, bfill, fill_nulls with mean/median/mode) or LOSS (drop_nulls, filter, filter_extended) are IRREVERSIBLE — once the raw file is deleted, the original values are gone.
+- For SYNTHETIC fills: REJECT unless null_pct > 30% AND column has clear semantic purpose (e.g. temperature_c, price_usd) where interpolation is standard practice.
+- For LOSS rules: REJECT unless the reasoning explicitly names the specific invalid values being removed (e.g. "removes 47 rows with negative duration_ms values").
+
 Dataset: ${totalRows} total rows, ${nullPct.toFixed(1)}% nulls overall, ${dupPct.toFixed(1)}% duplicates.
 ${responseFormat}`,
       `Rules to review (data loss perspective):\n${auditorData}\n\nFull rule list:\n${ruleList}`,

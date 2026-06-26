@@ -87,6 +87,11 @@ def save_dataframe(df: pd.DataFrame, fmt: str) -> tuple[bytes, str, str]:
         xml_bytes = etree.tostring(root, pretty_print=True, xml_declaration=True, encoding="UTF-8")
         return xml_bytes, "application/xml", "xml"
 
+    elif fmt == "parquet":
+        buf = io.BytesIO()
+        df.to_parquet(buf, index=False, engine="pyarrow")
+        return buf.getvalue(), "application/octet-stream", "parquet"
+
     else:
         buf = io.BytesIO()
         df.to_csv(buf, index=False)
@@ -476,6 +481,146 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                 for c in targets:
                     df[c] = df[c].astype(str).str.strip()
                     df[c] = df[c].replace({"nan": None, "": None})
+
+            elif rtype == "ffill":
+                if col and col in df.columns:
+                    sidecar = f"__orig_{col}"
+                    if sidecar not in df.columns:
+                        df[sidecar] = df[col]
+                    df[col] = df[col].ffill()
+
+            elif rtype == "bfill":
+                if col and col in df.columns:
+                    sidecar = f"__orig_{col}"
+                    if sidecar not in df.columns:
+                        df[sidecar] = df[col]
+                    df[col] = df[col].bfill()
+
+            elif rtype == "bool_cast":
+                if col and col in df.columns:
+                    TRUE_VALS = {"true", "yes", "1", "t", "y", "on"}
+                    FALSE_VALS = {"false", "no", "0", "f", "n", "off"}
+                    target = params.get("target", "bool")
+                    def _cast_bool(v):
+                        if pd.isna(v):
+                            return v
+                        s = str(v).strip().lower()
+                        if s in TRUE_VALS:
+                            return True if target == "bool" else (1 if target == "int" else "true")
+                        if s in FALSE_VALS:
+                            return False if target == "bool" else (0 if target == "int" else "false")
+                        return v  # unknown value → keep original unchanged
+                    df[col] = df[col].apply(_cast_bool)
+
+            elif rtype == "outlier_cap":
+                if col and col in df.columns:
+                    multiplier = float(params.get("iqr_multiplier", 1.5))
+                    numeric = pd.to_numeric(df[col], errors="coerce")
+                    q1 = numeric.quantile(0.25)
+                    q3 = numeric.quantile(0.75)
+                    iqr = q3 - q1
+                    lower = q1 - multiplier * iqr
+                    upper = q3 + multiplier * iqr
+                    sidecar = f"__orig_{col}"
+                    if sidecar not in df.columns:
+                        df[sidecar] = df[col]
+                    df[col] = numeric.clip(lower=lower, upper=upper)
+
+            elif rtype == "multi_currency_strip":
+                targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
+                CURRENCY_PATTERN = r'[$€£¥₹₩]|(?:USD|EUR|GBP|JPY|INR|CAD|AUD|CHF)\s*'
+                for c in targets:
+                    if df[c].dtype != object:
+                        continue
+                    cleaned = df[c].astype(str).str.replace(CURRENCY_PATTERN, "", regex=True)
+                    cleaned = cleaned.str.replace(",", "", regex=False).str.strip()
+                    numeric = pd.to_numeric(cleaned, errors="coerce")
+                    non_null = df[c].notna().sum()
+                    parsed_ok = numeric.notna().sum()
+                    if non_null > 0 and parsed_ok / non_null > 0.5:
+                        sidecar = f"__orig_{c}"
+                        if sidecar not in df.columns:
+                            df[sidecar] = df[c]
+                        df[c] = numeric
+                    else:
+                        print(f"[executor] multi_currency_strip: {c} — only {parsed_ok}/{non_null} parsed, skipping")
+
+            elif rtype == "filter_extended":
+                if col and col in df.columns:
+                    operator = params.get("operator", "notnull")
+                    value = params.get("value")
+                    values = params.get("values", [])
+                    pattern = params.get("pattern", "")
+                    df_before_rule = df.copy()
+                    if operator == "notnull":
+                        df = df[df[col].notna()]
+                    elif operator == "eq":
+                        df = df[df[col] == value]
+                    elif operator == "neq":
+                        df = df[df[col] != value]
+                    elif operator == "gt":
+                        df = df[_to_numeric_clean(df[col]) > float(value)]
+                    elif operator == "lt":
+                        df = df[_to_numeric_clean(df[col]) < float(value)]
+                    elif operator == "gte":
+                        df = df[_to_numeric_clean(df[col]) >= float(value)]
+                    elif operator == "lte":
+                        df = df[_to_numeric_clean(df[col]) <= float(value)]
+                    elif operator == "contains":
+                        df = df[df[col].astype(str).str.contains(str(value), na=False)]
+                    elif operator == "not_contains":
+                        df = df[~df[col].astype(str).str.contains(str(value), na=False)]
+                    elif operator == "in":
+                        df = df[df[col].isin(values)]
+                    elif operator == "not_in":
+                        df = df[~df[col].isin(values)]
+                    elif operator == "regex":
+                        if len(pattern) <= 200:
+                            try:
+                                df = df[df[col].astype(str).str.match(pattern, na=False)]
+                            except re.error as e:
+                                print(f"[executor] filter_extended regex error: {e}")
+                    elif operator == "startswith":
+                        df = df[df[col].astype(str).str.startswith(str(value), na=False)]
+                    elif operator == "endswith":
+                        df = df[df[col].astype(str).str.endswith(str(value), na=False)]
+                    # Per-rule row loss guard (Safeguard 3)
+                    loss_pct = (len(df_before_rule) - len(df)) / max(len(df_before_rule), 1)
+                    if loss_pct > 0.20:
+                        print(f"[executor] SAFETY: filter_extended on {col} deleted {loss_pct:.1%} rows — restoring")
+                        df = df_before_rule
+
+            elif rtype == "split_column":
+                if col and col in df.columns:
+                    delimiter = params.get("delimiter", "|")
+                    new_col_names = params.get("new_columns", [])
+                    max_splits = int(params.get("max_splits", -1))
+                    split_df = df[col].astype(str).str.split(
+                        pat=re.escape(delimiter),
+                        n=max_splits if max_splits > 0 else -1,
+                        expand=True,
+                    )
+                    for i in range(split_df.shape[1]):
+                        new_name = new_col_names[i] if i < len(new_col_names) else f"{col}_part{i + 1}"
+                        df[new_name] = split_df[i]
+                    # Source column preserved — user can drop manually
+
+            elif rtype == "column_header_normalize":
+                def _to_snake(name: str) -> str:
+                    s = str(name).strip()
+                    s = re.sub(r'[^\w\s]', '_', s)
+                    s = re.sub(r'\s+', '_', s)
+                    s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
+                    s = re.sub(r'_+', '_', s)
+                    return s.lower().strip('_')
+                rename_map = {}
+                for c in df.columns:
+                    new_name = _to_snake(str(c))
+                    if new_name != str(c):
+                        rename_map[c] = new_name
+                if rename_map:
+                    df = df.rename(columns=rename_map)
+                    print(f"[executor] column_header_normalize: renamed {len(rename_map)} columns")
 
             elif rtype == "ner_redact":
                 entities   = params.get("entities", ["PERSON", "ORG", "GPE", "DATE"])

@@ -28,9 +28,26 @@ secrets = boto3.client("secretsmanager")
 DOCUMENT_EXTENSIONS = {"pdf", "docx", "doc"}
 
 SENTINEL_VALUES = {
+    # Explicit null markers
     "", "n/a", "na", "null", "none", "unknown", "undefined", "not available",
-    "-", "--", "---", "?", "??", "0", "false", "nil", "nan", "missing",
+    "not applicable", "not provided", "not specified", "not given",
+    # Punctuation sentinels
+    "-", "--", "---", "----", ".", "..", "...",
+    "?", "??", "???", "#", "##",
+    # Coded sentinels
+    "0", "00", "000", "-1", "99", "999", "9999", "99999", "-99", "-999",
+    # Boolean-as-sentinel
+    "false", "nil", "nan", "missing", "void",
+    # State sentinels
     "n.a.", "n.a", "#n/a", "#null!", "tbd", "tbc", "pending", "not set",
+    "to be determined", "to be confirmed", "unknown value",
+    # Excel/CSV export artifacts
+    "#value!", "#ref!", "#div/0!", "#name?", "#num!", "#error!",
+    "error", "err", "null value", "blank", "empty",
+    # Common filler
+    "x", "xx", "xxx", "test", "temp", "placeholder", "sample",
+    # Numeric as string
+    "0.0", "0.00", "-1.0", "inf", "-inf",
 }
 
 DOMAIN_KEYWORDS = {
@@ -53,20 +70,70 @@ def get_db_conn():
     return psycopg2.connect(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
 
 
-def detect_format(key: str, content_type: str) -> str:
+def detect_encoding(file_bytes: bytes) -> str:
+    try:
+        import chardet
+        result = chardet.detect(file_bytes[:8192])
+        enc = result.get("encoding") or "utf-8"
+        confidence = result.get("confidence", 0.0)
+        return enc if confidence > 0.7 else "utf-8"
+    except ImportError:
+        return "utf-8"
+
+
+def detect_format(key: str, content_type: str, file_bytes: bytes = b"") -> str:
+    if file_bytes:
+        magic = file_bytes[:8]
+        if magic[:4] == b'\xd0\xcf\x11\xe0':  # OLE2 compound = old .xls
+            return "xls"
+        if magic[:4] == b'PK\x03\x04':  # ZIP-based = .xlsx or .docx
+            ext = key.rsplit(".", 1)[-1].lower()
+            return ext if ext in ("xlsx", "docx") else "xlsx"
+        if magic[:4] == b'%PDF':
+            return "pdf"
     return key.rsplit(".", 1)[-1].lower()
 
 
 def extract_text(file_bytes: bytes, fmt: str) -> str:
     if fmt == "pdf":
         import pdfplumber
+        parts = []
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            pages = [page.extract_text() or "" for page in pdf.pages]
-        return "\n\n".join(pages)
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        for row in table:
+                            parts.append(" | ".join(str(c) if c else "" for c in row))
+                else:
+                    text = page.extract_text()
+                    if text:
+                        parts.append(text)
+        return "\n\n".join(parts)
     elif fmt == "docx":
         from docx import Document
         doc = Document(io.BytesIO(file_bytes))
-        return "\n".join(p.text for p in doc.paragraphs)
+        parts = []
+        # Main body paragraphs
+        parts.extend(p.text for p in doc.paragraphs)
+        # Tables
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    parts.extend(p.text for p in cell.paragraphs)
+        # Headers and footers
+        for section in doc.sections:
+            for para in section.header.paragraphs:
+                parts.append(para.text)
+            for para in section.footer.paragraphs:
+                parts.append(para.text)
+        # Text boxes (DrawingML)
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        for txbx in doc.element.findall('.//w:txbxContent//w:p', ns):
+            text = "".join(r.text or "" for r in txbx.findall('.//w:r/w:t', ns))
+            if text:
+                parts.append(text)
+        return "\n".join(p for p in parts if p)
     else:
         return file_bytes.decode("utf-8", errors="replace")
 
@@ -170,17 +237,46 @@ def profile_document(text: str) -> dict:
 def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
     buf = io.BytesIO(file_bytes)
 
-    if fmt in ("csv", "txt"):
-        sample = file_bytes[:4096].decode("utf-8", errors="replace")
+    if fmt == "csv":
+        encoding = detect_encoding(file_bytes)
+        sample = file_bytes[:4096].decode(encoding, errors="replace")
         sep = "\t" if sample.count("\t") > sample.count(",") else ","
-        return pd.read_csv(io.BytesIO(file_bytes), sep=sep, low_memory=False)
+        return pd.read_csv(
+            io.BytesIO(file_bytes), sep=sep,
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt == "txt":
+        encoding = detect_encoding(file_bytes)
+        sample = file_bytes[:4096].decode(encoding, errors="replace")
+        counts = {s: sample.count(s) for s in [",", "\t", "|", ";"]}
+        sep = max(counts, key=counts.get)
+        if counts[sep] < 2:
+            return pd.read_csv(
+                io.BytesIO(file_bytes), sep=r'\s+',
+                dtype=str, keep_default_na=False, engine='python',
+                encoding=encoding, encoding_errors="replace",
+            )
+        return pd.read_csv(
+            io.BytesIO(file_bytes), sep=sep,
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
     elif fmt == "tsv":
-        return pd.read_csv(buf, sep="\t", low_memory=False)
+        encoding = detect_encoding(file_bytes)
+        return pd.read_csv(
+            buf, sep="\t",
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
     elif fmt in ("json", "jsonl"):
         text = file_bytes.decode("utf-8", errors="replace").strip()
         if fmt == "jsonl":
+            # Strip comment lines before parsing
+            lines = [l for l in text.splitlines() if not l.strip().startswith("//")]
+            text_clean = "\n".join(lines)
             try:
-                return pd.read_json(io.BytesIO(file_bytes), lines=True)
+                return pd.read_json(io.BytesIO(text_clean.encode()), lines=True)
             except Exception:
                 pass
         try:
@@ -200,7 +296,10 @@ def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
             return pd.read_json(io.BytesIO(file_bytes))
     elif fmt in ("xlsx", "xls"):
         xl = pd.ExcelFile(buf)
-        return xl.parse(xl.sheet_names[0])
+        df = xl.parse(xl.sheet_names[0], dtype=str, keep_default_na=False)
+        # Forward-fill merged cells (NaN after merge top-left = merged cell artifact)
+        df = df.ffill(axis=0)
+        return df
     elif fmt == "xml":
         from lxml import etree
         root = etree.fromstring(file_bytes)
@@ -250,7 +349,10 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
             "null_count":   int(series.isnull().sum()),
             "null_pct":     round(series.isnull().mean() * 100, 2),
             "unique_count": int(series.nunique()),
-            "sample_values": [str(v) for v in series.dropna().head(20).tolist()],
+            "sample_values": [
+                str(v) if isinstance(v, (int, float)) and abs(v) > 1e15 else v
+                for v in series.dropna().head(20).tolist()
+            ],
         }
 
         if pd.api.types.is_numeric_dtype(series):
@@ -324,6 +426,109 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
     }
 
 
+def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
+    """Detect dataset signals for gate-controlled rule suggestion in suggest-transforms."""
+    signals = {}
+    n = len(df)
+
+    # ── ffill candidate ───────────────────────────────────────────────────────
+    DATETIME_HINTS = ("date", "time", "created", "updated", "timestamp", "period",
+                      "month", "year", "day")
+    date_cols = [c for c in df.columns if any(h in str(c).lower() for h in DATETIME_HINTS)]
+    ffill_cols = []
+    for col in date_cols:
+        null_pct = df[col].isnull().mean()
+        if 0.01 < null_pct < 0.60:
+            ffill_cols.append(col)
+    for col in df.select_dtypes(include="object").columns:
+        if col in ffill_cols:
+            continue
+        null_pct = df[col].isnull().mean()
+        if 0.01 < null_pct < 0.40 and any(h in str(col).lower() for h in DATETIME_HINTS):
+            ffill_cols.append(col)
+    signals["has_ffill_candidate"] = len(ffill_cols) > 0
+    signals["ffill_candidate_cols"] = ffill_cols
+    signals["ffill_confidence"] = min(len(ffill_cols) * 0.3, 1.0)
+
+    # ── outlier signal ────────────────────────────────────────────────────────
+    outlier_cols = []
+    for col in df.select_dtypes(include="number").columns:
+        q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            outlier_count = ((df[col] < q1 - 1.5 * iqr) | (df[col] > q3 + 1.5 * iqr)).sum()
+            if outlier_count > 0:
+                outlier_cols.append(col)
+    signals["has_outliers"] = len(outlier_cols) > 0
+    signals["outlier_cols"] = outlier_cols
+    signals["outlier_confidence"] = min(len(outlier_cols) * 0.3, 1.0)
+
+    # ── boolean columns ───────────────────────────────────────────────────────
+    BOOL_VALUES = {"true", "false", "yes", "no", "1", "0", "t", "f", "y", "n", "on", "off"}
+    bool_cols = []
+    for col in df.select_dtypes(include="object").columns:
+        vals = set(df[col].dropna().str.lower().unique()) if hasattr(df[col], 'str') else set()
+        if vals and vals.issubset(BOOL_VALUES) and len(vals) <= 4:
+            bool_cols.append(col)
+    signals["has_boolean_column"] = len(bool_cols) > 0
+    signals["boolean_cols"] = bool_cols
+    signals["boolean_confidence"] = 0.95 if bool_cols else 0.0
+
+    # ── multi-currency ────────────────────────────────────────────────────────
+    CURRENCY_SYMBOLS = {"$", "€", "£", "¥", "₹", "₩", "CHF", "CAD", "AUD"}
+    currency_cols = []
+    all_symbols_found: set = set()
+    for col in df.select_dtypes(include="object").columns:
+        sample = df[col].dropna().head(100).astype(str)
+        symbols = set()
+        for sym in CURRENCY_SYMBOLS:
+            if sample.str.contains(re.escape(sym), regex=False).any():
+                symbols.add(sym)
+        if len(symbols) >= 2:
+            currency_cols.append(col)
+            all_symbols_found.update(symbols)
+    signals["has_multi_currency"] = len(currency_cols) > 0
+    signals["currency_symbols_found"] = list(all_symbols_found)
+    signals["currency_cols"] = currency_cols
+    signals["multi_currency_confidence"] = 0.85 if len(all_symbols_found) >= 2 else 0.0
+
+    # ── split column ──────────────────────────────────────────────────────────
+    SPLIT_DELIMITERS = ["|", ";", "::", " - ", "/", "\\"]
+    split_cols = []
+    split_delimiters: dict = {}
+    for col in df.select_dtypes(include="object").columns:
+        sample = df[col].dropna().head(100).astype(str)
+        for delim in SPLIT_DELIMITERS:
+            if sample.str.contains(re.escape(delim), regex=False).mean() > 0.70:
+                split_cols.append(col)
+                split_delimiters[col] = delim
+                break
+    signals["has_split_candidate"] = len(split_cols) > 0
+    signals["split_cols"] = split_cols
+    signals["split_delimiters"] = split_delimiters
+    signals["split_confidence"] = 0.70 if split_cols else 0.0
+
+    # ── messy column headers ──────────────────────────────────────────────────
+    messy = [c for c in df.columns if re.search(r'[A-Z\s\-\.\/\\#@!%]', str(c)) or " " in str(c)]
+    signals["has_messy_headers"] = len(messy) > 0
+    signals["messy_header_count"] = len(messy)
+
+    # ── scale ─────────────────────────────────────────────────────────────────
+    signals["row_count"] = n
+    signals["needs_chunked_processing"] = n > 500_000
+
+    # ── numeric locale (European: 1.234,56 format) ────────────────────────────
+    locale_cols = []
+    for col in df.select_dtypes(include="object").columns:
+        sample = df[col].dropna().head(50).astype(str)
+        if sample.str.match(r'^\d{1,3}(\.\d{3})+(,\d+)?$').mean() > 0.5:
+            locale_cols.append(col)
+    signals["has_numeric_locale"] = len(locale_cols) > 0
+    signals["locale_cols"] = locale_cols
+
+    return signals
+
+
 def handler(event, context):
     record = event["Records"][0]["s3"]
     bucket = record["bucket"]["name"]
@@ -336,7 +541,10 @@ def handler(event, context):
 
     obj        = s3.get_object(Bucket=bucket, Key=key)
     file_bytes = obj["Body"].read()
-    fmt        = detect_format(key, obj.get("ContentType", ""))
+    # Strip UTF-8 BOM if present (prevents invisible char in first column name)
+    if file_bytes[:3] == b'\xef\xbb\xbf':
+        file_bytes = file_bytes[3:]
+    fmt        = detect_format(key, obj.get("ContentType", ""), file_bytes)
     run_id     = parts[2]
 
     conn = get_db_conn()
@@ -391,6 +599,9 @@ def handler(event, context):
                     f"CleanStack requires structured data with multiple columns."
                 )
             profile = compute_quality_score(df)
+            # Inject signal detection into column_stats (Phase B — no schema change needed)
+            signals = detect_signals(df, profile["column_stats"])
+            profile["column_stats"]["_signals"] = signals
 
         cur.execute(
             """INSERT INTO data_profiles

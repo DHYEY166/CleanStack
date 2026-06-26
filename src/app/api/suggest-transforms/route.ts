@@ -18,6 +18,7 @@ import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@
 
 const ruleSchema = z.object({
   rule_type: z.enum([
+    // existing rules
     "drop_nulls",
     "deduplicate",
     "semantic_deduplicate",
@@ -28,6 +29,16 @@ const ruleSchema = z.object({
     "normalize",
     "fill_nulls",
     "trim_whitespace",
+    // Phase C new rules (gate-controlled via signal detection)
+    "ffill",
+    "bfill",
+    "bool_cast",
+    "outlier_cap",
+    "multi_currency_strip",
+    "filter_extended",
+    "split_column",
+    "parquet_write",
+    "column_header_normalize",
   ]),
   column_name: z.string().nullable(),
   parameters: z.record(z.string(), z.unknown()),
@@ -350,7 +361,8 @@ IMPORTANT RULES:
   }
 
   const columnStats = profile.column_stats ?? {};
-  const sampleRows = buildSampleRows(columnStats);
+  const signals = (columnStats as Record<string, unknown>)["_signals"] as Record<string, unknown> ?? {};
+  const sampleRows = buildSampleRows(columnStats as Record<string, { sample_values?: unknown[] }>);
   const columnSummary = buildColumnSummary(columnStats as Record<string, ColStat>);
 
   const isSubsequentPass = (run.iteration ?? 1) > 1;
@@ -370,6 +382,19 @@ ${isSubsequentPass ? `
 ` : ``}
 
 ---
+
+## CRITICAL DATA INTEGRITY RULES — READ FIRST
+1. NEVER suggest fill_nulls with strategy "mean", "median", or "mode" unless the column is purely numeric and null_pct < 40%. These are SYNTHETIC values — they replace missing data with computed approximations.
+2. NEVER suggest ffill or bfill on non-time-series data. These copy adjacent row values into nulls — always SYNTHETIC.
+3. NEVER suggest outlier_cap on ID columns, date columns, or any column where extreme values might be real (e.g. salary outliers in executive compensation).
+4. When you do suggest a SYNTHETIC fill, you MUST:
+   a. Include "⚠ SYNTHETIC: fills null with computed value" in ai_reasoning
+   b. Include "synthetic_fill": true in parameters
+   c. Explain WHY the synthetic fill is appropriate for this specific column
+5. NEVER invent data. Only suggest transforms for issues actually visible in the profile.
+
+## SIGNAL GATE
+${signalGate(signals)}
 
 ## DATASET OVERVIEW
 - Quality score      : ${profile.quality_score}/100
@@ -563,6 +588,52 @@ ner_redact:
   parameters: {"entities": ["PERSON","ORG","GPE","DATE","IP"], "replacement": "[REDACTED]"}
   Use when: data destined for AI training and contains person names, company names, addresses, dates, or IPs that should be anonymised beyond basic PII (email/phone/SSN already covered by strip_pii). Pick only the entity types actually present in the data.
 
+ffill (forward fill — only if SIGNAL GATE says YES):
+  column_name: "column"
+  parameters: {"synthetic_fill": true}
+  Use when: time-indexed column with sparse nulls that should inherit prior row value.
+  MUST include "⚠ SYNTHETIC: fills null with computed value" in ai_reasoning.
+
+bfill (backward fill — only if SIGNAL GATE says YES):
+  column_name: "column"
+  parameters: {"synthetic_fill": true}
+  Use when: time-indexed column with nulls at start that should inherit next row value.
+  MUST include "⚠ SYNTHETIC: fills null with computed value" in ai_reasoning.
+
+bool_cast (only if SIGNAL GATE says YES):
+  column_name: "column"
+  parameters: {"target": "bool"}   ← or "int" or "str"
+  Use when: column contains only true/false/yes/no/1/0 variants that should be normalized.
+
+outlier_cap (only if SIGNAL GATE says YES):
+  column_name: "column"
+  parameters: {"iqr_multiplier": 1.5}
+  Use when: numeric column has statistical outliers (IQR method) that should be capped rather than dropped. DO NOT use on ID, date, or salary/compensation columns.
+
+multi_currency_strip (only if SIGNAL GATE says YES):
+  column_name: "column" or null (apply to all detected currency cols)
+  parameters: {}
+  Use when: column mixes currency symbols like $, €, £ making numeric aggregation impossible.
+
+filter_extended:
+  column_name: "column"
+  parameters: {"operator": "gte", "value": "0"}
+  parameters: {"operator": "lte", "value": "100"}
+  parameters: {"operator": "contains", "value": "substring"}
+  parameters: {"operator": "regex", "pattern": "^[A-Z]{2}$"}
+  parameters: {"operator": "in", "values": ["a", "b", "c"]}
+  Use when: existing filter operators (gt/lt/eq/neq/notnull) are insufficient.
+
+split_column (only if SIGNAL GATE says YES):
+  column_name: "column"
+  parameters: {"delimiter": "|", "new_columns": ["part_a", "part_b"]}
+  Use when: column consistently contains multiple values separated by a delimiter.
+
+column_header_normalize (only if SIGNAL GATE says YES):
+  column_name: null
+  parameters: {}
+  Use when: column names contain spaces, mixed case, or special characters.
+
 ---
 
 For each rule, write ai_reasoning as one precise sentence that references the specific values observed (e.g. "Sample values show '$24.99', '$199.99' — currency symbols prevent numeric aggregation; stripping and casting to float enables revenue calculations.").`;
@@ -644,10 +715,40 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   }
 }
 
+function signalGate(signals: Record<string, unknown>): string {
+  const lines: string[] = ["SIGNAL GATE — only suggest the following rule types if the signal is true:"];
+
+  const ffill = signals["has_ffill_candidate"];
+  const ffillCols = ((signals["ffill_candidate_cols"] as string[] | undefined) ?? []).join(", ");
+  lines.push(`- ffill: ${ffill ? `YES — eligible columns: ${ffillCols || "unknown"}` : "NO — do not suggest ffill"}`);
+  lines.push(`- bfill: ${ffill ? `YES — same columns as ffill` : "NO — do not suggest bfill"}`);
+
+  const outliers = signals["has_outliers"];
+  const outlierCols = ((signals["outlier_cols"] as string[] | undefined) ?? []).join(", ");
+  lines.push(`- outlier_cap: ${outliers ? `YES — columns with outliers: ${outlierCols}` : "NO — IQR analysis shows no statistical outliers"}`);
+
+  const booleans = signals["has_boolean_column"];
+  const boolCols = ((signals["boolean_cols"] as string[] | undefined) ?? []).join(", ");
+  lines.push(`- bool_cast: ${booleans ? `YES — columns: ${boolCols}` : "NO — no boolean-string columns detected"}`);
+
+  const multiCurrency = signals["has_multi_currency"];
+  const currSymbols = ((signals["currency_symbols_found"] as string[] | undefined) ?? []).join(" ");
+  lines.push(`- multi_currency_strip: ${multiCurrency ? `YES — symbols found: ${currSymbols}` : "NO"}`);
+
+  const split = signals["has_split_candidate"];
+  const splitDelimiters = JSON.stringify(signals["split_delimiters"] ?? {});
+  lines.push(`- split_column: ${split ? `YES — columns+delimiters: ${splitDelimiters}` : "NO"}`);
+
+  const headers = signals["has_messy_headers"];
+  lines.push(`- column_header_normalize: ${headers ? `YES — ${signals["messy_header_count"]} messy column names detected` : "NO"}`);
+
+  return lines.join("\n");
+}
+
 function buildSampleRows(
   columnStats: Record<string, { sample_values?: unknown[] }>
 ): Record<string, unknown>[] {
-  const columns = Object.keys(columnStats);
+  const columns = Object.keys(columnStats).filter((c) => c !== "_signals");
   if (!columns.length) return [];
   const maxSamples = Math.max(...columns.map((c) => columnStats[c].sample_values?.length ?? 0));
   const rows: Record<string, unknown>[] = [];
@@ -679,7 +780,7 @@ type ColStat = {
 };
 
 function buildColumnSummary(columnStats: Record<string, ColStat>): string {
-  return Object.entries(columnStats).map(([col, s]) => {
+  return Object.entries(columnStats).filter(([col]) => col !== "_signals").map(([col, s]) => {
     const lines: string[] = [`Column: "${col}"`];
     lines.push(`  type: ${s.type ?? "?"} | unique: ${s.unique_count ?? "?"} | null%: ${s.null_pct ?? 0}%` +
       (s.true_null_pct != null && s.true_null_pct !== s.null_pct
