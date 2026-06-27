@@ -22,7 +22,7 @@ export default function ColumnStatsTable({ columnStats }: ColumnStatsTableProps)
         </thead>
         <tbody className="divide-y divide-gray-800/50">
           {columns.map(([col, stat]) => {
-            const nullPct = stat.null_pct ?? 0;
+            const nullPct = Number(stat.null_pct ?? 0);
             const isProblem = nullPct > 20;
             return (
               <tr key={col} className={isProblem ? "bg-red-500/5" : ""}>
@@ -49,7 +49,7 @@ export default function ColumnStatsTable({ columnStats }: ColumnStatsTableProps)
                   {nullPct.toFixed(1)}%
                 </td>
                 <td className="py-2 pr-4 text-right font-mono text-xs text-gray-400">
-                  {(stat.unique_count ?? 0).toLocaleString()}
+                  {Number(stat.unique_count ?? 0).toLocaleString()}
                 </td>
                 <td className="py-2">
                   <div className="flex flex-wrap gap-1">
