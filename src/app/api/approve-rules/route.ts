@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Run is not awaiting approval" }, { status: 409 });
     }
 
-    // Wrap rule updates + audit insert in a single transaction — prevents partial write
+    // Wrap rule updates + audit insert + run status in a single transaction
     const approvedCount = await withTransaction(async (txId) => {
       await Promise.all(
         rule_decisions.map((d) => {
@@ -75,25 +75,30 @@ export async function POST(req: NextRequest) {
         txId
       );
 
-      return rule_decisions.filter((d) => d.action === "approved").length;
+      const count = rule_decisions.filter((d) => d.action === "approved").length;
+
+      // Set run status inside transaction — reconciler cron will retry SQS if send fails below
+      if (count > 0 && process.env.SQS_QUEUE_URL) {
+        await queryOne("UPDATE pipeline_runs SET status = 'queued' WHERE id = $1", [run_id], txId);
+      } else {
+        await queryOne("UPDATE pipeline_runs SET status = 'completed' WHERE id = $1", [run_id], txId);
+      }
+
+      return count;
     });
 
     if (approvedCount > 0 && process.env.SQS_QUEUE_URL) {
-      await sqs.send(
-        new SendMessageCommand({
-          QueueUrl: process.env.SQS_QUEUE_URL,
-          MessageBody: JSON.stringify({ run_id }),
-        })
-      );
-      await queryOne(
-        "UPDATE pipeline_runs SET status = 'queued' WHERE id = $1",
-        [run_id]
-      );
-    } else {
-      await queryOne(
-        "UPDATE pipeline_runs SET status = 'completed' WHERE id = $1",
-        [run_id]
-      );
+      try {
+        await sqs.send(
+          new SendMessageCommand({
+            QueueUrl: process.env.SQS_QUEUE_URL,
+            MessageBody: JSON.stringify({ run_id }),
+          })
+        );
+      } catch (sqsErr) {
+        // Status already 'queued' in DB — reconciler cron will retry SQS delivery
+        console.error("[approve-rules] SQS send failed (reconciler will retry):", sqsErr);
+      }
     }
 
     return NextResponse.json({ ok: true });

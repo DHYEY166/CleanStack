@@ -5,7 +5,7 @@ interface ColumnStatsTableProps {
 }
 
 export default function ColumnStatsTable({ columnStats }: ColumnStatsTableProps) {
-  const columns = Object.entries(columnStats);
+  const columns = Object.entries(columnStats).filter(([col]) => col !== "_signals");
   if (!columns.length) return null;
 
   return (

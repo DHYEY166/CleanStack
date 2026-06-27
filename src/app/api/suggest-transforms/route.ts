@@ -392,6 +392,7 @@ ${isSubsequentPass ? `
    b. Include "synthetic_fill": true in parameters
    c. Explain WHY the synthetic fill is appropriate for this specific column
 5. NEVER invent data. Only suggest transforms for issues actually visible in the profile.
+6. RULE ORDERING: column_header_normalize MUST always be the LAST rule in your output list. It renames column headers — any filter, type_cast, fill_nulls, drop_nulls, or rename rule placed after it that references old column names will silently no-op. Never place column_header_normalize before any rule that references column names by value.
 
 ${!isSubsequentPass ? `## SIGNAL GATE\n${signalGate(signals)}\n` : ""}
 ## DATASET OVERVIEW

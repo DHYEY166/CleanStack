@@ -35,6 +35,7 @@ export default function RunStatusPoller({
 
         if (run.status !== statusRef.current) {
           statusRef.current = run.status;
+          attemptRef.current = 0; // reset backoff on state change — next poll should be fast
 
           if (run.status === "completed" && child_run_id && pipelineId) {
             routerRef.current.push(`/pipelines/${pipelineId}/runs/${child_run_id}`);

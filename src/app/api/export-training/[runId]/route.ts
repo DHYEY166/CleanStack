@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { queryOneWithTeam } from "@/lib/db";
+import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
@@ -82,6 +83,9 @@ export async function GET(
 ) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rateLimitRes = await checkRateLimit(aiLimiter, userId);
+  if (rateLimitRes) return rateLimitRes;
 
   const { runId } = await params;
   const url = new URL(req.url);
