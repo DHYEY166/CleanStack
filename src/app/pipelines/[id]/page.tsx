@@ -185,7 +185,7 @@ export default async function PipelinePage({
                         {run.row_count_raw != null && (
                           <span className="flex items-center gap-1">
                             <Rows3 className="h-3 w-3" aria-hidden="true" />
-                            {run.row_count_raw.toLocaleString()} rows
+                            {Number(run.row_count_raw).toLocaleString()} rows
                           </span>
                         )}
                       </div>

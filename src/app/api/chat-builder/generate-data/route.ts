@@ -60,7 +60,8 @@ export async function POST(req: NextRequest) {
   if (rateLimitRes) return rateLimitRes;
 
   const body: GenerateRequest = await req.json();
-  const { description, config, format = "csv", row_count = 20 } = body;
+  const { description: rawDescription, config, format = "csv", row_count = 20 } = body;
+  const description = typeof rawDescription === "string" ? rawDescription.slice(0, 2000) : "";
   const safeRowCount = Math.min(Math.max(1, Number(row_count) || 20), 100);
 
   const rulesSummary = config.rules

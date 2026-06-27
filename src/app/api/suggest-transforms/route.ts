@@ -319,7 +319,7 @@ IMPORTANT RULES:
       console.error("[suggest-transforms] Bedrock document error:", aiErr);
       await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, `AI error: ${String(aiErr)}`]);
-      return NextResponse.json({ error: String(aiErr) }, { status: 500 });
+      return NextResponse.json({ error: "AI processing error" }, { status: 500 });
     }
 
     if (!docOutput?.rules?.length) {
@@ -657,7 +657,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
       "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
       [run_id, `AI error: ${String(aiErr)}`]
     );
-    return NextResponse.json({ error: String(aiErr) }, { status: 500 });
+    return NextResponse.json({ error: "AI processing error" }, { status: 500 });
   }
 
   if (!output?.rules?.length) {

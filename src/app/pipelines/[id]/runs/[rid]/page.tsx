@@ -223,13 +223,13 @@ export default async function RunDetailPage({
             {run.row_count_raw != null && (
               <div>
                 <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">{run.mode === "document" ? "Lines (raw)" : "Rows (raw)"}</div>
-                <div className="text-white font-medium tabular-nums">{run.row_count_raw.toLocaleString()}</div>
+                <div className="text-white font-medium tabular-nums">{Number(run.row_count_raw).toLocaleString()}</div>
               </div>
             )}
             {run.row_count_processed != null && (
               <div>
                 <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">{run.mode === "document" ? "Lines (processed)" : "Rows (processed)"}</div>
-                <div className="text-white font-medium tabular-nums">{run.row_count_processed.toLocaleString()}</div>
+                <div className="text-white font-medium tabular-nums">{Number(run.row_count_processed).toLocaleString()}</div>
               </div>
             )}
           </div>
