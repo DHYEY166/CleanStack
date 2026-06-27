@@ -1,5 +1,6 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
@@ -72,21 +73,17 @@ export async function POST(req: NextRequest) {
     );
     if (!pipeline) return NextResponse.json({ error: "Pipeline not found" }, { status: 404 });
 
+    const runId = randomUUID();
+    const s3Key = `${userId}/${pipeline_id}/${runId}/raw.${ext}`;
+
     const run = await queryOne<PipelineRun>(
-      `INSERT INTO pipeline_runs (pipeline_id, status, file_format, raw_s3_key, started_at)
-       VALUES ($1, 'pending', $2, $3, now())
+      `INSERT INTO pipeline_runs (id, pipeline_id, status, file_format, raw_s3_key, started_at)
+       VALUES ($1, $2, 'pending', $3, $4, now())
        RETURNING *`,
-      [pipeline_id, ext, `${userId}/${pipeline_id}/PLACEHOLDER`]
+      [runId, pipeline_id, ext, s3Key]
     );
 
     if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
-
-    const s3Key = `${userId}/${pipeline_id}/${run.id}/raw.${ext}`;
-
-    await queryOne(
-      "UPDATE pipeline_runs SET raw_s3_key = $1 WHERE id = $2",
-      [s3Key, run.id]
-    );
 
     const command = new PutObjectCommand({
       Bucket: process.env.S3_RAW_BUCKET,
