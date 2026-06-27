@@ -141,9 +141,18 @@ def apply_transforms_pdf(file_bytes: bytes, rules: list[dict]) -> tuple[bytes, s
                     pattern = params.get("pattern", "")
                     replacement = str(params.get("replacement", "[REDACTED]"))
                     if pattern:
-                        for match in set(re.findall(pattern, page_text)):
-                            for area in page.search_for(str(match)):
-                                page.add_redact_annot(area, text=replacement, fontsize=8)
+                        if len(pattern) > 200:
+                            print(f"[executor] PDF redact_pattern too long ({len(pattern)} chars), skipping")
+                        else:
+                            try:
+                                compiled_pdf = re.compile(pattern)
+                            except re.error as regex_err:
+                                print(f"[executor] PDF redact_pattern invalid regex: {regex_err}")
+                                compiled_pdf = None
+                            if compiled_pdf:
+                                for match in set(compiled_pdf.findall(page_text)):
+                                    for area in page.search_for(str(match)):
+                                        page.add_redact_annot(area, text=replacement, fontsize=8)
 
                 elif rtype == "remove_headers_footers":
                     from collections import Counter
@@ -361,6 +370,7 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
 
         try:
             if rtype == "drop_nulls":
+                df_before_rule = df.copy()
                 if col and col in df.columns:
                     threshold = params.get("threshold", 0.0)
                     if isinstance(threshold, (int, float)) and float(threshold) < 1.0:
@@ -370,6 +380,10 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                         df = df.dropna(subset=[col])
                 elif not col:
                     df = df.dropna()
+                loss_pct = 1 - len(df) / max(len(df_before_rule), 1)
+                if loss_pct > 0.20:
+                    print(f"[executor] drop_nulls row-loss guard: {loss_pct:.0%} loss, reverting")
+                    df = df_before_rule
 
             elif rtype == "deduplicate":
                 subset = [col] if col and col in df.columns else None
@@ -426,6 +440,7 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
 
             elif rtype == "filter":
                 if col and col in df.columns:
+                    df_before_rule = df.copy()
                     operator = params.get("operator", "notnull")
                     value = params.get("value")
                     if operator == "notnull":
@@ -438,6 +453,10 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                         df = df[_to_numeric_clean(df[col]) > float(value)]
                     elif operator == "lt":
                         df = df[_to_numeric_clean(df[col]) < float(value)]
+                    loss_pct = 1 - len(df) / max(len(df_before_rule), 1)
+                    if loss_pct > 0.20:
+                        print(f"[executor] filter row-loss guard: {loss_pct:.0%} loss, reverting")
+                        df = df_before_rule
 
             elif rtype == "normalize":
                 if col and col in df.columns:
@@ -466,6 +485,11 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                 if col and col in df.columns:
                     strategy = params.get("strategy", "value")
                     fill_value = params.get("value", "Uncategorized")
+                    # Sidecar for SYNTHETIC strategies — preserves originals for audit/rollback
+                    if strategy in ("mean", "median", "mode"):
+                        sidecar = f"__orig_{col}"
+                        if sidecar not in df.columns:
+                            df[sidecar] = df[col]
                     if strategy == "mean":
                         df[col] = df[col].fillna(_to_numeric_clean(df[col]).mean())
                     elif strategy == "median":
@@ -938,7 +962,9 @@ def handler(event, context):
                 Body=file_bytes,
                 ContentType=content_type,
             )
-            profile = compute_quality_profile(df)
+            # Strip __orig_* sidecar columns before profiling — they inflate type_mismatch and trigger false drift alerts
+            df_for_profile = df[[c for c in df.columns if not str(c).startswith("__orig_")]]
+            profile = compute_quality_profile(df_for_profile)
 
         cur.execute(
             """INSERT INTO data_profiles
@@ -986,7 +1012,9 @@ def handler(event, context):
                     print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
             return {"statusCode": 200, "run_id": run_id}
 
-        new_hash, col_defs = schema_hash(df)
+        # Strip __orig_* sidecar columns before schema hash — sidecars must not trigger drift alerts
+        df_for_schema = df[[c for c in df.columns if not str(c).startswith("__orig_")]]
+        new_hash, col_defs = schema_hash(df_for_schema)
 
         cur.execute(
             """SELECT schema_hash FROM schema_snapshots
