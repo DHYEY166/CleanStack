@@ -569,7 +569,7 @@ def handler(event, context):
 
     try:
         cur.execute(
-            "UPDATE pipeline_runs SET status = 'profiling' WHERE id = %s AND status = 'pending' RETURNING id",
+            "UPDATE pipeline_runs SET status = 'profiling', updated_at = now() WHERE id = %s AND status = 'pending' RETURNING id",
             (run_id,)
         )
         claimed = cur.fetchone()
@@ -638,7 +638,7 @@ def handler(event, context):
         )
 
         cur.execute(
-            "UPDATE pipeline_runs SET status = 'awaiting_ai', row_count_raw = %s WHERE id = %s",
+            "UPDATE pipeline_runs SET status = 'awaiting_ai', row_count_raw = %s, updated_at = now() WHERE id = %s",
             (profile["total_rows"], run_id),
         )
         conn.commit()
@@ -655,7 +655,7 @@ def handler(event, context):
     except Exception as e:
         conn.rollback()
         cur.execute(
-            "UPDATE pipeline_runs SET status = 'failed', error_message = %s WHERE id = %s",
+            "UPDATE pipeline_runs SET status = 'failed', error_message = %s, updated_at = now() WHERE id = %s",
             (str(e), run_id),
         )
         conn.commit()
