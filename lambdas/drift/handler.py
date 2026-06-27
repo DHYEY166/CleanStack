@@ -96,8 +96,11 @@ def handler(event, context):
                 config = dest[0] if isinstance(dest[0], dict) else json.loads(dest[0])
                 webhook_url = config.get("webhook_url")
                 if webhook_url:
-                    payload = format_slack_message(pipeline_id, run_id, diff)
-                    requests.post(webhook_url, json=payload, timeout=10)
+                    if not webhook_url.startswith("https://hooks.slack.com/"):
+                        print(f"[drift] rejecting non-Slack webhook URL for pipeline {pipeline_id}")
+                    else:
+                        payload = format_slack_message(pipeline_id, run_id, diff)
+                        requests.post(webhook_url, json=payload, timeout=10)
 
             # Log drift summary back to run (store in pipeline_runs error_message is wrong;
             # instead update the schema_snapshot row with diff JSONB)
