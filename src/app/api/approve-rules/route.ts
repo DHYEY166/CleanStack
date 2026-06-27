@@ -79,9 +79,9 @@ export async function POST(req: NextRequest) {
 
       // Set run status inside transaction — reconciler cron will retry SQS if send fails below
       if (count > 0 && process.env.SQS_QUEUE_URL) {
-        await queryOne("UPDATE pipeline_runs SET status = 'queued' WHERE id = $1", [run_id], txId);
+        await queryOne("UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1", [run_id], txId);
       } else {
-        await queryOne("UPDATE pipeline_runs SET status = 'completed' WHERE id = $1", [run_id], txId);
+        await queryOne("UPDATE pipeline_runs SET status = 'completed', updated_at = now() WHERE id = $1", [run_id], txId);
       }
 
       return count;

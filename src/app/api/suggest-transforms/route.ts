@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
   // Atomic mutex: only one concurrent caller can claim this run.
   // UPDATE returns a row only if status is still 'awaiting_ai' — first writer wins, rest bail.
   const claimed = await queryOne<{ id: string }>(
-    "UPDATE pipeline_runs SET status = 'queued' WHERE id = $1 AND status = 'awaiting_ai' RETURNING id",
+    "UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1 AND status = 'awaiting_ai' RETURNING id",
     [run_id]
   );
   if (!claimed) {
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
   // Per-team AI rate limit (50 calls/hr) — prevents burst from queued SQS messages
   const rateLimitRes = await checkRateLimit(aiLimiter, `ai:${run.team_id}`);
   if (rateLimitRes) {
-    await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+    await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
       [run_id, "AI rate limit exceeded (50/hr per team). Retry later."]);
     return rateLimitRes;
   }
@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
         const used = await getMonthlyUsage(pipelineRow.team_id);
         if (used >= planConfig.includedRows) {
           await queryOne(
-            "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+            "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
             [run_id, `Monthly row limit reached (${used.toLocaleString()} / ${planConfig.includedRows.toLocaleString()} rows on ${planId} plan). Upgrade to continue.`]
           );
           return NextResponse.json({ error: "Quota exceeded" }, { status: 402 });
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
       // AI spend cap check
       const aiSpend = await checkAiSpendCap(pipelineRow.team_id);
       if (aiSpend.blocked) {
-        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
           [run_id, `AI spend cap reached ($${aiSpend.currentSpendUsd.toFixed(2)} / $${aiSpend.hardCapUsd} this month). Contact support.`]);
         return NextResponse.json({ error: "AI spend cap exceeded" }, { status: 402 });
       }
@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
       );
 
       await queryOne(
-        "UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1",
+        "UPDATE pipeline_runs SET status = 'awaiting_approval', updated_at = now() WHERE id = $1",
         [run_id]
       );
 
@@ -317,13 +317,13 @@ IMPORTANT RULES:
       meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
     } catch (aiErr) {
       console.error("[suggest-transforms] Bedrock document error:", aiErr);
-      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, `AI error: ${String(aiErr)}`]);
       return NextResponse.json({ error: String(aiErr) }, { status: 500 });
     }
 
     if (!docOutput?.rules?.length) {
-      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, "AI returned no document rules"]);
       return NextResponse.json({ error: "No rules generated" }, { status: 500 });
     }
@@ -356,11 +356,11 @@ IMPORTANT RULES:
       if (!avRes.ok) {
         const body = await avRes.text().catch(() => "");
         console.error(`[suggest-transforms] auto-validate ${avRes.status}: ${body}`);
-        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
           [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
       }
     } else {
-      await queryOne("UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1", [run_id]);
+      await queryOne("UPDATE pipeline_runs SET status = 'awaiting_approval', updated_at = now() WHERE id = $1", [run_id]);
     }
     return NextResponse.json({ ok: true, rules_count: docOutput.rules.length, mode: "document" });
   }
@@ -654,7 +654,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   } catch (aiErr) {
     console.error("[suggest-transforms] Bedrock error:", aiErr);
     await queryOne(
-      "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
       [run_id, `AI error: ${String(aiErr)}`]
     );
     return NextResponse.json({ error: String(aiErr) }, { status: 500 });
@@ -662,7 +662,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
 
   if (!output?.rules?.length) {
     await queryOne(
-      "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
       [run_id, "AI returned no transform rules"]
     );
     return NextResponse.json({ error: "No rules generated" }, { status: 500 });
@@ -696,12 +696,12 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
     if (!avRes.ok) {
       const body = await avRes.text().catch(() => "");
       console.error(`[suggest-transforms] auto-validate ${avRes.status}: ${body}`);
-      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
     }
   } else {
     await queryOne(
-      "UPDATE pipeline_runs SET status = 'awaiting_approval' WHERE id = $1",
+      "UPDATE pipeline_runs SET status = 'awaiting_approval', updated_at = now() WHERE id = $1",
       [run_id]
     );
   }
@@ -711,7 +711,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
     console.error("[suggest-transforms] unhandled error:", err);
     try {
       await queryOne(
-        "UPDATE pipeline_runs SET status = 'failed', error_message = $2 WHERE id = $1",
+        "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, `Internal error: ${String(err).slice(0, 500)}`]
       );
     } catch {}

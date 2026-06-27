@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   }
 
   await queryOne(
-    "UPDATE pipeline_runs SET status = 'awaiting_ai' WHERE id = $1",
+    "UPDATE pipeline_runs SET status = 'awaiting_ai', updated_at = now() WHERE id = $1",
     [run_id]
   );
 
