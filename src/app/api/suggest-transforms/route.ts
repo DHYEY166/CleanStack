@@ -715,7 +715,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
         [run_id, `Internal error: ${String(err).slice(0, 500)}`]
       );
     } catch {}
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
