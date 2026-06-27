@@ -56,10 +56,12 @@ export async function GET(req: NextRequest) {
   if (!pipeline_id) return NextResponse.json({ error: "pipeline_id required" }, { status: 400 });
 
   const dest = await queryOne<{ config: Record<string, string>; is_active: boolean }>(
-    `SELECT config, is_active FROM pipeline_destinations
-     WHERE pipeline_id = $1 AND type = 'slack_alert'
+    `SELECT pd.config, pd.is_active
+     FROM pipeline_destinations pd
+     JOIN pipelines p ON pd.pipeline_id = p.id
+     WHERE pd.pipeline_id = $1 AND p.team_id = $2 AND pd.type = 'slack_alert'
      LIMIT 1`,
-    [pipeline_id]
+    [pipeline_id, userId]
   );
 
   return NextResponse.json({

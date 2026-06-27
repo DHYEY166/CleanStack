@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { generateText } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
 
@@ -51,8 +53,15 @@ function jsonToXlsx(rows: Record<string, unknown>[]): Buffer {
 }
 
 export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rateLimitRes = await checkRateLimit(aiLimiter, userId);
+  if (rateLimitRes) return rateLimitRes;
+
   const body: GenerateRequest = await req.json();
   const { description, config, format = "csv", row_count = 20 } = body;
+  const safeRowCount = Math.min(Math.max(1, Number(row_count) || 20), 100);
 
   const rulesSummary = config.rules
     .map((r) => `- ${r.rule_type}${r.column_name ? ` on "${r.column_name}"` : ""}: ${r.ai_reasoning}`)
@@ -88,7 +97,7 @@ User's data description: "${description}"
 Data quality issues to demonstrate (from cleaning rules):
 ${rulesSummary}
 
-Generate exactly ${row_count} rows of realistic data matching this domain. Output ONLY a raw JSON array — no markdown fences, no explanation, nothing else.
+Generate exactly ${safeRowCount} rows of realistic data matching this domain. Output ONLY a raw JSON array — no markdown fences, no explanation, nothing else.
 
 Mandatory dirty patterns to embed:
 ${dirtyPatterns}
