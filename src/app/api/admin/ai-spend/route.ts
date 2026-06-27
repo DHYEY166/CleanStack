@@ -8,7 +8,8 @@ function safeCompare(a: string, b: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  if (!safeCompare(req.headers.get("x-admin-secret") ?? "", process.env.ADMIN_SECRET ?? "")) {
+  const expectedSecret = process.env.ADMIN_SECRET ?? "";
+  if (!expectedSecret || !safeCompare(req.headers.get("x-admin-secret") ?? "", expectedSecret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

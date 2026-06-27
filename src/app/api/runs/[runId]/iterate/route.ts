@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, CopyObjectCommand } from "@aws-sdk/client-s3";
+import { randomUUID } from "crypto";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import type { PipelineRun } from "@/lib/types";
 
@@ -36,28 +37,12 @@ export async function POST(
 
   const ext = run.file_format ?? "csv";
 
-  let newRun: PipelineRun | null = null;
   try {
-    // Create new run record first to get its ID
-    newRun = await queryOne<PipelineRun>(
-      `INSERT INTO pipeline_runs
-         (pipeline_id, status, file_format, raw_s3_key, started_at, iteration, parent_run_id)
-       VALUES ($1, 'pending', $2, $3, now(), $4, $5)
-       RETURNING *`,
-      [
-        run.pipeline_id,
-        ext,
-        `${userId}/${run.pipeline_id}/PLACEHOLDER`,
-        currentIteration + 1,
-        runId,
-      ]
-    );
+    // Pre-generate run ID so S3 key is known before any DB write — eliminates PLACEHOLDER race
+    const newRunId = randomUUID();
+    const newRawKey = `${userId}/${run.pipeline_id}/${newRunId}/raw.${ext}`;
 
-    if (!newRun) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
-
-    const newRawKey = `${userId}/${run.pipeline_id}/${newRun.id}/raw.${ext}`;
-
-    // Copy processed output → new raw key (triggers S3 event → profiler Lambda)
+    // S3 copy first — if it throws, no orphaned DB record is created
     await s3.send(
       new CopyObjectCommand({
         Bucket: process.env.S3_RAW_BUCKET!,
@@ -66,11 +51,15 @@ export async function POST(
       })
     );
 
-    // Update run with correct raw_s3_key
-    await queryOne(
-      "UPDATE pipeline_runs SET raw_s3_key = $1 WHERE id = $2",
-      [newRawKey, newRun.id]
+    const newRun = await queryOne<PipelineRun>(
+      `INSERT INTO pipeline_runs
+         (id, pipeline_id, status, file_format, raw_s3_key, started_at, iteration, parent_run_id)
+       VALUES ($1, $2, 'pending', $3, $4, now(), $5, $6)
+       RETURNING *`,
+      [newRunId, run.pipeline_id, ext, newRawKey, currentIteration + 1, runId]
     );
+
+    if (!newRun) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
 
     return NextResponse.json({
       run_id: newRun.id,
@@ -79,10 +68,6 @@ export async function POST(
     });
   } catch (err) {
     console.error("[iterate]", err);
-    // Clean up orphaned run record if S3 copy failed
-    if (newRun) {
-      await queryOne("DELETE FROM pipeline_runs WHERE id = $1", [newRun.id]).catch(() => {});
-    }
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

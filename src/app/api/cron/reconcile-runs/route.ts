@@ -12,7 +12,8 @@ export const maxDuration = 30;
 const STUCK_AFTER_MINUTES = 20;
 
 export async function GET(req: Request) {
-  if (!safeCompare(req.headers.get("Authorization") ?? "", `Bearer ${process.env.CRON_SECRET ?? ""}`)) {
+  const expectedCronSecret = process.env.CRON_SECRET ?? "";
+  if (!expectedCronSecret || !safeCompare(req.headers.get("Authorization") ?? "", `Bearer ${expectedCronSecret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -9,7 +9,8 @@ function safeCompare(a: string, b: string): boolean {
 }
 
 export async function POST(req: Request) {
-  if (!safeCompare(req.headers.get("x-admin-secret") ?? "", process.env.ADMIN_SECRET ?? "")) {
+  const expectedSecret = process.env.ADMIN_SECRET ?? "";
+  if (!expectedSecret || !safeCompare((req.headers as Headers).get("x-admin-secret") ?? "", expectedSecret)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

@@ -109,10 +109,10 @@ export default async function RunDetailPage({
     run.parent_run_id &&
     processedProfile?.quality_score != null &&
     parentProcessedProfile?.quality_score != null &&
-    parentProcessedProfile.quality_score > 0
+    Number(parentProcessedProfile.quality_score) > 0
       ? Math.round(
-          ((processedProfile.quality_score - parentProcessedProfile.quality_score) /
-            parentProcessedProfile.quality_score) *
+          ((Number(processedProfile.quality_score) - Number(parentProcessedProfile.quality_score)) /
+            Number(parentProcessedProfile.quality_score)) *
             100 *
             10
         ) / 10
@@ -135,8 +135,8 @@ export default async function RunDetailPage({
       const prevScore = i === 0
         ? (parentProcessedProfile?.quality_score ?? null)
         : (autoChainRuns[i - 1].processed_score ?? null);
-      const imp = cr.processed_score != null && prevScore != null && prevScore > 0
-        ? Math.round(((cr.processed_score - prevScore) / prevScore) * 100 * 10) / 10
+      const imp = cr.processed_score != null && prevScore != null && Number(prevScore) > 0
+        ? Math.round(((Number(cr.processed_score) - Number(prevScore)) / Number(prevScore)) * 100 * 10) / 10
         : null;
       autoSummaryPasses.push({ iteration: cr.iteration, improvement: imp, processedScore: cr.processed_score ?? null, rules: passRulesArr[i] });
     }
@@ -146,7 +146,7 @@ export default async function RunDetailPage({
     .filter((r) => r.quality_score != null)
     .map((r, i) => ({
       run_index: i + 1,
-      score: r.quality_score!,
+      score: Number(r.quality_score!),
       label: `#${i + 1}`,
     }));
 
@@ -163,7 +163,7 @@ export default async function RunDetailPage({
 
   const delta =
     rawProfile?.quality_score != null && processedProfile?.quality_score != null
-      ? processedProfile.quality_score - rawProfile.quality_score
+      ? Number(processedProfile.quality_score) - Number(rawProfile.quality_score)
       : null;
 
   // Build schema diff if two snapshots exist and hashes differ
@@ -257,7 +257,7 @@ export default async function RunDetailPage({
             pipelineId={id}
             iteration={run.iteration ?? 1}
             improvement={iterationImprovement}
-            processedScore={processedProfile?.quality_score ?? null}
+            processedScore={processedProfile?.quality_score != null ? Number(processedProfile.quality_score) : null}
             autoMode={run.auto_mode ?? false}
           />
         )}
@@ -275,13 +275,13 @@ export default async function RunDetailPage({
               Data Quality Score
             </h2>
             <div className="flex items-end justify-around gap-4 flex-wrap">
-              <QualityGauge score={rawProfile?.quality_score ?? null} label="Before" />
+              <QualityGauge score={rawProfile?.quality_score != null ? Number(rawProfile.quality_score) : null} label="Before" />
 
               <div className="flex flex-col items-center gap-1 pb-6">
                 <div className="text-gray-600 text-2xl">→</div>
               </div>
 
-              <QualityGauge score={processedProfile?.quality_score ?? null} label="After" />
+              <QualityGauge score={processedProfile?.quality_score != null ? Number(processedProfile.quality_score) : null} label="After" />
 
               {delta != null && (
                 <div className="flex flex-col items-center gap-1 pb-6">
@@ -303,7 +303,7 @@ export default async function RunDetailPage({
               Document Profile
             </h2>
             <DocumentProfile
-              qualityScore={rawProfile.quality_score ?? 0}
+              qualityScore={rawProfile.quality_score != null ? Number(rawProfile.quality_score) : 0}
               totalLines={rawProfile.total_rows ?? 0}
               columnStats={rawProfile.column_stats ?? {}}
             />

@@ -70,8 +70,13 @@ const documentOutputSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  const expectedSecret = process.env.WEBHOOK_SECRET ?? "";
+  if (!expectedSecret) {
+    console.error("[suggest-transforms] WEBHOOK_SECRET not set — rejecting request");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   const secret = req.headers.get("x-webhook-secret");
-  if (!safeCompare(secret ?? "", process.env.WEBHOOK_SECRET ?? "")) {
+  if (!safeCompare(secret ?? "", expectedSecret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

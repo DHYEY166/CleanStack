@@ -22,7 +22,8 @@ export default function ColumnStatsTable({ columnStats }: ColumnStatsTableProps)
         </thead>
         <tbody className="divide-y divide-gray-800/50">
           {columns.map(([col, stat]) => {
-            const isProblem = stat.null_pct > 20;
+            const nullPct = stat.null_pct ?? 0;
+            const isProblem = nullPct > 20;
             return (
               <tr key={col} className={isProblem ? "bg-red-500/5" : ""}>
                 <td className="py-2 pr-4">
@@ -35,24 +36,24 @@ export default function ColumnStatsTable({ columnStats }: ColumnStatsTableProps)
                 </td>
                 <td className="py-2 pr-4">
                   <span className="text-xs bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded">
-                    {stat.type}
+                    {stat.type ?? "unknown"}
                   </span>
                 </td>
                 <td className={`py-2 pr-4 text-right font-mono text-xs ${
-                  stat.null_pct > 40
+                  nullPct > 40
                     ? "text-red-400"
-                    : stat.null_pct > 10
+                    : nullPct > 10
                     ? "text-yellow-400"
                     : "text-gray-400"
                 }`}>
-                  {stat.null_pct.toFixed(1)}%
+                  {nullPct.toFixed(1)}%
                 </td>
                 <td className="py-2 pr-4 text-right font-mono text-xs text-gray-400">
-                  {stat.unique_count.toLocaleString()}
+                  {(stat.unique_count ?? 0).toLocaleString()}
                 </td>
                 <td className="py-2">
                   <div className="flex flex-wrap gap-1">
-                    {stat.sample_values.slice(0, 3).map((v, i) => (
+                    {(stat.sample_values ?? []).slice(0, 3).map((v, i) => (
                       <span
                         key={i}
                         className="text-xs bg-gray-800 text-gray-500 px-1.5 py-0.5 rounded max-w-[120px] truncate"
