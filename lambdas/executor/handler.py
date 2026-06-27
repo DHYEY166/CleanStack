@@ -495,6 +495,9 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                         else:
                             df[col] = df[col].astype(str).str.strip().str.lower()
                     else:
+                        sidecar = f"__orig_{col}"
+                        if sidecar not in df.columns:
+                            df[sidecar] = df[col]
                         numeric = pd.to_numeric(df[col], errors="coerce")
                         col_min, col_max = numeric.min(), numeric.max()
                         if col_max > col_min:
@@ -544,6 +547,9 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
 
             elif rtype == "bool_cast":
                 if col and col in df.columns:
+                    sidecar = f"__orig_{col}"
+                    if sidecar not in df.columns:
+                        df[sidecar] = df[col]
                     TRUE_VALS = {"true", "yes", "1", "t", "y", "on"}
                     FALSE_VALS = {"false", "no", "0", "f", "n", "off"}
                     target = params.get("target", "bool")
@@ -721,8 +727,10 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                     return text
 
                 for c in targets:
+                    was_null = df[c].isna()
                     df[c] = df[c].astype(str).apply(_apply_ner)
-                    df[c] = df[c].replace({"nan": None, "": None})
+                    # Consistent with trim_whitespace: only null cells that were already null or became empty
+                    df[c] = df[c].where(~(was_null | (df[c] == "")), other=None)
 
         except Exception as e:
             print(f"[executor] skipping rule {rtype} on {col}: {e}")
@@ -909,6 +917,9 @@ def handler(event, context):
             if key not in seen_doc:
                 seen_doc.add(key)
                 rules.append(r)
+
+        # column_header_normalize must run last — renames columns, invalidating all subsequent column_name lookups
+        rules.sort(key=lambda r: 1 if r["rule_type"] == "column_header_normalize" else 0)
 
         # Read raw file from S3
         raw_bucket = os.environ["S3_RAW_BUCKET"]
