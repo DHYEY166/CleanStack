@@ -34,20 +34,18 @@ SENTINEL_VALUES = {
     # Punctuation sentinels
     "-", "--", "---", "----", ".", "..", "...",
     "?", "??", "???", "#", "##",
-    # Coded sentinels
-    "0", "00", "000", "-1", "99", "999", "9999", "99999", "-99", "-999",
-    # Boolean-as-sentinel
-    "false", "nil", "nan", "missing", "void",
+    # Coded sentinels — unambiguous null-proxy numbers only
+    "00", "000", "99", "999", "9999", "99999", "-99", "-999",
+    # Boolean-as-sentinel (nil/nan/missing/void are unambiguous; "false" and "0" are valid data)
+    "nil", "nan", "missing", "void",
     # State sentinels
     "n.a.", "n.a", "#n/a", "#null!", "tbd", "tbc", "pending", "not set",
     "to be determined", "to be confirmed", "unknown value",
-    # Excel/CSV export artifacts
+    # Excel/CSV export artifacts — always invalid in real data
     "#value!", "#ref!", "#div/0!", "#name?", "#num!", "#error!",
     "error", "err", "null value", "blank", "empty",
-    # Common filler
-    "x", "xx", "xxx", "test", "temp", "placeholder", "sample",
-    # Numeric as string
-    "0.0", "0.00", "-1.0", "inf", "-inf",
+    # Numeric as string — inf/-inf are unambiguous; 0/0.0/-1 removed (valid in real data)
+    "inf", "-inf",
 }
 
 DOMAIN_KEYWORDS = {
@@ -459,12 +457,14 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
         null_pct = _effective_null_pct(df[col])
         if 0.01 < null_pct < 0.40 and any(h in str(col).lower() for h in DATETIME_HINTS):
             ffill_cols.append(col)
-    signals["has_ffill_candidate"] = len(ffill_cols) > 0
     signals["ffill_candidate_cols"] = ffill_cols
     signals["ffill_confidence"] = min(len(ffill_cols) * 0.3, 1.0)
+    # Gate: require 2+ candidate columns (confidence >= 0.6) to avoid noisy single-col suggestions
+    signals["has_ffill_candidate"] = signals["ffill_confidence"] >= 0.6
 
     # ── outlier signal ────────────────────────────────────────────────────────
     # dtype=str: coerce object cols to numeric before IQR analysis
+    OUTLIER_MIN_ROWS = 3  # at least 3 outlier rows required — prevents single-point noise firing the gate
     outlier_cols = []
     for col in df.columns:
         _num = pd.to_numeric(df[col], errors="coerce") if df[col].dtype == object else df[col]
@@ -473,7 +473,8 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
         q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
         iqr = q3 - q1
         if iqr > 0:
-            if ((_num < q1 - 1.5 * iqr) | (_num > q3 + 1.5 * iqr)).sum() > 0:
+            n_outliers = int(((_num < q1 - 1.5 * iqr) | (_num > q3 + 1.5 * iqr)).sum())
+            if n_outliers >= OUTLIER_MIN_ROWS:
                 outlier_cols.append(col)
     signals["has_outliers"] = len(outlier_cols) > 0
     signals["outlier_cols"] = outlier_cols
