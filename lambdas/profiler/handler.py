@@ -38,8 +38,8 @@ SENTINEL_VALUES = {
     "00", "000", "99", "999", "9999", "99999", "-99", "-999",
     # Boolean-as-sentinel (nil/nan/missing/void are unambiguous; "false" and "0" are valid data)
     "nil", "nan", "missing", "void",
-    # State sentinels
-    "n.a.", "n.a", "#n/a", "#null!", "tbd", "tbc", "pending", "not set",
+    # State sentinels (excludes "pending" — valid status value in workflow/ticket/order datasets)
+    "n.a.", "n.a", "#n/a", "#null!", "tbd", "tbc", "not set",
     "to be determined", "to be confirmed", "unknown value",
     # Excel/CSV export artifacts — always invalid in real data
     "#value!", "#ref!", "#div/0!", "#name?", "#num!", "#error!",
