@@ -309,42 +309,56 @@ def load_raw_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
     if fmt in ("csv", "txt"):
         sample = file_bytes[:4096].decode("utf-8", errors="replace")
         sep = "\t" if sample.count("\t") > sample.count(",") else ","
-        return pd.read_csv(io.BytesIO(file_bytes), sep=sep, low_memory=False)
+        df = pd.read_csv(io.BytesIO(file_bytes), sep=sep, low_memory=False)
     elif fmt == "tsv":
-        return pd.read_csv(buf, sep="\t", low_memory=False)
+        df = pd.read_csv(buf, sep="\t", low_memory=False)
     elif fmt in ("json", "jsonl"):
         text = file_bytes.decode("utf-8", errors="replace").strip()
         if fmt == "jsonl":
             try:
-                return pd.read_json(io.BytesIO(file_bytes), lines=True)
+                df = pd.read_json(io.BytesIO(file_bytes), lines=True)
+                return _strip_sidecar_cols(df)
             except Exception:
                 pass
         try:
             parsed = json.loads(text)
             if isinstance(parsed, list):
-                return pd.json_normalize(parsed)
+                df = pd.json_normalize(parsed)
             elif isinstance(parsed, dict):
                 for v in parsed.values():
                     if isinstance(v, list):
-                        return pd.json_normalize(v)
-                return pd.json_normalize([parsed])
+                        df = pd.json_normalize(v)
+                        return _strip_sidecar_cols(df)
+                df = pd.json_normalize([parsed])
+            else:
+                df = pd.read_json(io.BytesIO(file_bytes), lines=True)
         except Exception:
-            pass
-        return pd.read_json(io.BytesIO(file_bytes), lines=True)
+            df = pd.read_json(io.BytesIO(file_bytes), lines=True)
     elif fmt in ("xlsx", "xls"):
         xl = pd.ExcelFile(buf)
-        return xl.parse(xl.sheet_names[0])
+        df = xl.parse(xl.sheet_names[0])
     elif fmt == "xml":
         from lxml import etree
         root = etree.fromstring(file_bytes)
         rows = [{child.tag: child.text for child in elem} for elem in root]
         if not rows:
             rows = [{sub.tag: sub.text for sub in root}]
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
     elif fmt == "parquet":
-        return pd.read_parquet(buf)
+        df = pd.read_parquet(buf)
     else:
         raise ValueError(f"Unsupported format for executor: {fmt}")
+
+    return _strip_sidecar_cols(df)
+
+
+def _strip_sidecar_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove __orig_* audit sidecar columns from re-ingested processed files."""
+    sidecar_cols = [c for c in df.columns if str(c).startswith("__orig_")]
+    if sidecar_cols:
+        print(f"[executor] stripping {len(sidecar_cols)} __orig_* sidecar columns from re-ingested file")
+        df = df.drop(columns=sidecar_cols)
+    return df
 
 
 def _parse_params(raw) -> dict:
@@ -419,6 +433,11 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
             elif rtype == "type_cast":
                 if col and col in df.columns:
                     target = params.get("target_type", "str")
+                    # Sidecar for irreversible casts — non-parseable originals become NaN/NaT with no recovery
+                    if target in ("float", "float64", "numeric", "number", "int", "int64", "datetime", "date", "timestamp"):
+                        sidecar = f"__orig_{col}"
+                        if sidecar not in df.columns:
+                            df[sidecar] = df[col]
                     if target in ("float", "float64", "numeric", "number"):
                         df[col] = _to_numeric_clean(df[col])
                     elif target in ("int", "int64"):
@@ -503,8 +522,11 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
             elif rtype == "trim_whitespace":
                 targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
                 for c in targets:
+                    was_null = df[c].isna()
                     df[c] = df[c].astype(str).str.strip()
-                    df[c] = df[c].replace({"nan": None, "": None})
+                    # Null only cells that were already null (serialized to "nan" by astype(str)) or became empty after strip
+                    # Preserves legitimate string value "nan" (e.g. currency ticker, city name)
+                    df[c] = df[c].where(~(was_null | (df[c] == "")), other=None)
 
             elif rtype == "ffill":
                 if col and col in df.columns:
