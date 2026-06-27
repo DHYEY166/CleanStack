@@ -46,6 +46,6 @@ export async function GET(
     return NextResponse.json({ run, child_run_id });
   } catch (err) {
     console.error("[GET /api/run-status]", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

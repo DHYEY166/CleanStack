@@ -251,13 +251,18 @@ ${responseFormat}`,
   ]);
 
   if (approved.length > 0 && process.env.SQS_QUEUE_URL) {
-    await sqs.send(
-      new SendMessageCommand({
-        QueueUrl: process.env.SQS_QUEUE_URL,
-        MessageBody: JSON.stringify({ run_id: runId }),
-      })
-    );
+    // Set status before SQS so reconciler can pick up the run if SQS fails
     await queryOne("UPDATE pipeline_runs SET status = 'queued' WHERE id = $1", [runId]);
+    try {
+      await sqs.send(
+        new SendMessageCommand({
+          QueueUrl: process.env.SQS_QUEUE_URL,
+          MessageBody: JSON.stringify({ run_id: runId }),
+        })
+      );
+    } catch (sqsErr) {
+      console.error(`[auto-validate] SQS send failed for run ${runId} — reconciler will retry:`, sqsErr);
+    }
   } else {
     // No approved rules — mark completed, nothing to execute
     await queryOne("UPDATE pipeline_runs SET status = 'completed' WHERE id = $1", [runId]);
