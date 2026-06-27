@@ -22,9 +22,10 @@ export async function GET(req: Request) {
   const updated = await query<{ id: string }>(
     `UPDATE pipeline_runs
      SET status = 'failed',
-         error_message = 'Run timed out after 20 minutes — likely a Lambda or network failure. Please retry.'
+         error_message = 'Run timed out after 20 minutes — likely a Lambda or network failure. Please retry.',
+         updated_at = now()
      WHERE status IN ('profiling', 'awaiting_ai', 'queued', 'running')
-       AND created_at < $1
+       AND updated_at < $1
      RETURNING id`,
     [cutoff]
   );

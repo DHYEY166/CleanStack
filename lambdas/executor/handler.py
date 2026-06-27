@@ -873,7 +873,7 @@ def handler(event, context):
 
     try:
         cur.execute(
-            "UPDATE pipeline_runs SET status = 'running' WHERE id = %s",
+            "UPDATE pipeline_runs SET status = 'running', updated_at = now() WHERE id = %s",
             (run_id,)
         )
         conn.commit()
@@ -980,7 +980,7 @@ def handler(event, context):
                 if loss_pct > 0.10:
                     print(f"[executor] Row count guard triggered: {loss_pct:.1%} loss — aborting, keeping parent output")
                     cur.execute(
-                        "UPDATE pipeline_runs SET status = 'failed', error_message = %s WHERE id = %s",
+                        "UPDATE pipeline_runs SET status = 'failed', error_message = %s, updated_at = now() WHERE id = %s",
                         (f"Auto-clean aborted: {loss_pct:.1%} row loss exceeds 10% safety threshold", run_id),
                     )
                     conn.commit()
@@ -1021,7 +1021,8 @@ def handler(event, context):
                SET status = 'completed',
                    processed_s3_key = %s,
                    row_count_processed = %s,
-                   completed_at = now()
+                   completed_at = now(),
+                   updated_at = now()
                WHERE id = %s""",
             (processed_key, profile["total_rows"], run_id),
         )
@@ -1098,7 +1099,7 @@ def handler(event, context):
     except Exception as e:
         conn.rollback()
         cur.execute(
-            "UPDATE pipeline_runs SET status = 'failed', error_message = %s WHERE id = %s",
+            "UPDATE pipeline_runs SET status = 'failed', error_message = %s, updated_at = now() WHERE id = %s",
             (str(e), run_id),
         )
         conn.commit()

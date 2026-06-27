@@ -117,7 +117,7 @@ export async function POST(
     [runId]
   );
   if (!rules.length) {
-    await queryOne("UPDATE pipeline_runs SET status = 'completed' WHERE id = $1", [runId]);
+    await queryOne("UPDATE pipeline_runs SET status = 'completed', updated_at = now() WHERE id = $1", [runId]);
     return NextResponse.json({ ok: true, approved: 0, rejected: 0 });
   }
 
@@ -252,7 +252,7 @@ ${responseFormat}`,
 
   if (approved.length > 0 && process.env.SQS_QUEUE_URL) {
     // Set status before SQS so reconciler can pick up the run if SQS fails
-    await queryOne("UPDATE pipeline_runs SET status = 'queued' WHERE id = $1", [runId]);
+    await queryOne("UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1", [runId]);
     try {
       await sqs.send(
         new SendMessageCommand({
@@ -265,7 +265,7 @@ ${responseFormat}`,
     }
   } else {
     // No approved rules — mark completed, nothing to execute
-    await queryOne("UPDATE pipeline_runs SET status = 'completed' WHERE id = $1", [runId]);
+    await queryOne("UPDATE pipeline_runs SET status = 'completed', updated_at = now() WHERE id = $1", [runId]);
   }
 
   return NextResponse.json({
