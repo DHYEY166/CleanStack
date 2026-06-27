@@ -44,7 +44,7 @@ export default function AutoCleanSummary({ passes }: Props) {
                 </span>
                 {pass.improvement !== null && (
                   <span className={`text-sm font-semibold ${pass.improvement >= 0 ? "text-green-400" : "text-red-400"}`}>
-                    {pass.improvement >= 0 ? "+" : ""}{pass.improvement.toFixed(1)}%
+                    {pass.improvement >= 0 ? "+" : ""}{Number(pass.improvement).toFixed(1)}%
                     {pass.processedScore != null && (
                       <span className="text-gray-500 font-normal"> (score: {pass.processedScore})</span>
                     )}
