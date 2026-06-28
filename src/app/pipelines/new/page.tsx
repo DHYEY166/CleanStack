@@ -90,11 +90,24 @@ export default function NewPipelinePage() {
       if (uErr) throw new Error(uErr);
       setProgress(40);
 
-      await fetch(presigned_url, {
-        method: "PUT",
-        body: file,
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-      });
+      const uploadController = new AbortController();
+      const uploadTimeout = setTimeout(() => uploadController.abort(), 120_000);
+      try {
+        const s3Res = await fetch(presigned_url, {
+          method: "PUT",
+          body: file,
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+          signal: uploadController.signal,
+        });
+        if (!s3Res.ok) throw new Error(`Upload failed — please retry`);
+      } catch (fetchErr) {
+        if (fetchErr instanceof DOMException && fetchErr.name === "AbortError") {
+          throw new Error("Upload timed out — check your connection and retry");
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(uploadTimeout);
+      }
       setProgress(70);
       setStep("processing");
 

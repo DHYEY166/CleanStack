@@ -51,18 +51,16 @@ export async function POST(req: NextRequest) {
 
     // Wrap rule updates + audit insert + run status in a single transaction
     const approvedCount = await withTransaction(async (txId) => {
-      await Promise.all(
-        rule_decisions.map((d) => {
-          const params = d.modifications ? JSON.stringify(d.modifications) : null;
-          return query(
-            `UPDATE transform_rules
-             SET status = $2${params ? ", parameters = $3" : ""}
-             WHERE id = $1 AND run_id = $${params ? "4" : "3"}`,
-            params ? [d.rule_id, d.action, params, run_id] : [d.rule_id, d.action, run_id],
-            txId
-          );
-        })
-      );
+      for (const d of rule_decisions) {
+        const params = d.modifications ? JSON.stringify(d.modifications) : null;
+        await query(
+          `UPDATE transform_rules
+           SET status = $2${params ? ", parameters = $3" : ""}
+           WHERE id = $1 AND run_id = $${params ? "4" : "3"}`,
+          params ? [d.rule_id, d.action, params, run_id] : [d.rule_id, d.action, run_id],
+          txId
+        );
+      }
 
       const ruleChanges = Object.fromEntries(
         rule_decisions.map((d) => [d.rule_id, { action: d.action, modifications: d.modifications }])
