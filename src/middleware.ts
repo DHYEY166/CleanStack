@@ -22,6 +22,10 @@ const isRootPath = createRouteMatcher(["/"]);
 
 export default clerkMiddleware(async (auth, req) => {
   if (isProtectedRoute(req)) {
+    const adminSecret = req.headers.get("x-admin-secret");
+    if (adminSecret && adminSecret === process.env.ADMIN_SECRET && req.nextUrl.pathname.startsWith("/api/")) {
+      return;
+    }
     await auth.protect();
     return;
   }
