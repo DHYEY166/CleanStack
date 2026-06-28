@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
   completed_at TIMESTAMPTZ,
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
   iteration INTEGER NOT NULL DEFAULT 1,
   parent_run_id UUID REFERENCES pipeline_runs(id) ON DELETE SET NULL,
   auto_mode BOOLEAN NOT NULL DEFAULT FALSE

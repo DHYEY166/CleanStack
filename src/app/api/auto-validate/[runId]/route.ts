@@ -67,8 +67,8 @@ function parseVotes(text: string, rules: TransformRule[]): VoteResult[] {
   } catch {
     // fallback: try to extract per-rule votes from text
   }
-  // Fallback: approve all if parse fails
-  return rules.map((r) => ({ rule_id: r.id, vote: "APPROVE" as const, reason: "parse fallback" }));
+  // Fallback: reject all if parse fails — safe default, never run unreviewed rules
+  return rules.map((r) => ({ rule_id: r.id, vote: "REJECT" as const, reason: "parse fallback — conservative reject" }));
 }
 
 async function runConsultant(

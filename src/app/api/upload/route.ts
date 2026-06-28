@@ -12,7 +12,7 @@ const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
 const ALLOWED_EXTENSIONS = new Set([
   "csv", "tsv", "txt", "json", "jsonl",
-  "xlsx", "xls", "xml", "parquet",
+  "xlsx", "xls", "xml",
   "pdf", "docx",
 ]);
 
@@ -25,7 +25,6 @@ const EXT_CONTENT_TYPES: Record<string, string> = {
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   xls: "application/vnd.ms-excel",
   xml: "application/xml",
-  parquet: "application/octet-stream",
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
