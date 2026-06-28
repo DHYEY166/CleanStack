@@ -51,9 +51,33 @@ export async function GET(
     const chunks: Uint8Array[] = [];
     const stream = obj.Body as AsyncIterable<Uint8Array>;
     for await (const chunk of stream) chunks.push(chunk);
-    const fileBytes = Buffer.concat(chunks);
+    let fileBytes = Buffer.concat(chunks);
 
-    const mime = MIME[run.file_format ?? "csv"] ?? MIME["csv"];
+    const fmt = run.file_format ?? "csv";
+
+    // Strip __orig_* audit columns from CSV/TSV before delivering to user
+    if (fmt === "csv" || fmt === "tsv") {
+      const sep = fmt === "tsv" ? "\t" : ",";
+      const text = fileBytes.toString("utf-8");
+      const lines = text.split("\n");
+      if (lines.length > 0) {
+        const headers = lines[0].split(sep);
+        const keepIdx = headers
+          .map((h, i) => ({ h: h.replace(/^"|"$/g, ""), i }))
+          .filter(({ h }) => !h.startsWith("__orig_"))
+          .map(({ i }) => i);
+        if (keepIdx.length < headers.length) {
+          const cleaned = lines.map((line) => {
+            if (!line.trim()) return line;
+            const cells = line.split(sep);
+            return keepIdx.map((i) => cells[i] ?? "").join(sep);
+          });
+          fileBytes = Buffer.from(cleaned.join("\n"), "utf-8");
+        }
+      }
+    }
+
+    const mime = MIME[fmt] ?? MIME["csv"];
 
     return new NextResponse(fileBytes, {
       headers: {

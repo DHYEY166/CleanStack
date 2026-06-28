@@ -445,7 +445,10 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                     elif target == "str":
                         df[col] = df[col].astype(str)
                     elif target in ("datetime", "date", "timestamp"):
-                        parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
+                        try:
+                            parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
+                        except Exception:
+                            parsed = pd.to_datetime(df[col], errors="coerce")
                         # Replace NaT with None (null) not string "NaT"
                         df[col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), other=None)
                     else:
@@ -480,20 +483,35 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
             elif rtype == "normalize":
                 if col and col in df.columns:
                     if df[col].dtype == object:
-                        # Try mixed-format date parsing (pandas 2.0+)
-                        try:
-                            parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
-                        except Exception:
-                            parsed = pd.to_datetime(df[col], infer_datetime_format=True, errors="coerce")
-                        # For any still-NaT values, retry with dayfirst=True
-                        mask = parsed.isna() & df[col].notna() & (df[col].astype(str) != "nan")
-                        if mask.any():
-                            retry = pd.to_datetime(df[col][mask], format="mixed", dayfirst=True, errors="coerce")
-                            parsed[mask] = retry
-                        if parsed.notna().sum() > len(df) * 0.3:
-                            df[col] = parsed.dt.strftime("%Y-%m-%d")
+                        # Sample 50 rows to decide if column looks like dates before full parse
+                        sample = df[col].dropna().astype(str).head(50)
+                        sample_parsed = pd.to_datetime(sample, format="mixed", dayfirst=False, errors="coerce")
+                        looks_like_dates = sample_parsed.notna().sum() > len(sample) * 0.3
+                        if looks_like_dates:
+                            try:
+                                parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
+                            except Exception:
+                                parsed = pd.to_datetime(df[col], errors="coerce")
+                            # Retry still-NaT values with dayfirst=True
+                            mask = parsed.isna() & df[col].notna() & (df[col].astype(str) != "nan")
+                            if mask.any():
+                                retry = pd.to_datetime(df[col][mask], format="mixed", dayfirst=True, errors="coerce")
+                                parsed[mask] = retry
+                            if parsed.notna().sum() > len(df) * 0.3:
+                                df[col] = parsed.dt.strftime("%Y-%m-%d")
+                            else:
+                                df[col] = df[col].astype(str).str.strip().str.lower()
                         else:
                             df[col] = df[col].astype(str).str.strip().str.lower()
+                        # Apply value_map after normalization — maps lowercased variants to canonical form
+                        value_map = params.get("value_map", {})
+                        if value_map:
+                            vmap_lower = {str(k).strip().lower(): str(v) for k, v in value_map.items()}
+                            def _apply_vmap(v):
+                                if pd.isna(v) or str(v) == "nan":
+                                    return v
+                                return vmap_lower.get(str(v).strip().lower(), v)
+                            df[col] = df[col].apply(_apply_vmap)
                     else:
                         sidecar = f"__orig_{col}"
                         if sidecar not in df.columns:
@@ -573,6 +591,11 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
                     iqr = q3 - q1
                     lower = q1 - multiplier * iqr
                     upper = q3 + multiplier * iqr
+                    # Explicit domain bounds override IQR (tighter constraints for known ranges)
+                    if params.get("min_val") is not None:
+                        lower = float(params["min_val"])
+                    if params.get("max_val") is not None:
+                        upper = float(params["max_val"])
                     sidecar = f"__orig_{col}"
                     if sidecar not in df.columns:
                         df[sidecar] = df[col]

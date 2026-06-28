@@ -7,7 +7,8 @@ function safeCompare(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 import { bedrock } from "@ai-sdk/amazon-bedrock";
-import { getSubscription, getMonthlyUsage, PLANS, type PlanId } from "@/lib/billing";
+import { checkQuota } from "@/lib/billing";
+import { clerkClient } from "@clerk/nextjs/server";
 import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 
@@ -118,18 +119,16 @@ export async function POST(req: NextRequest) {
       [run.pipeline_id]
     );
     if (pipelineRow) {
-      const sub = await getSubscription(pipelineRow.team_id);
-      const planId: PlanId = (sub?.plan as PlanId) ?? "free";
-      const planConfig = PLANS[planId];
-      if (planConfig.hardCap) {
-        const used = await getMonthlyUsage(pipelineRow.team_id);
-        if (used >= planConfig.includedRows) {
-          await queryOne(
-            "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
-            [run_id, `Monthly row limit reached (${used.toLocaleString()} / ${planConfig.includedRows.toLocaleString()} rows on ${planId} plan). Upgrade to continue.`]
-          );
-          return NextResponse.json({ error: "Quota exceeded" }, { status: 402 });
-        }
+      const clerk = await clerkClient();
+      const clerkUser = await clerk.users.getUser(pipelineRow.team_id).catch(() => null);
+      const ownerEmail = clerkUser?.emailAddresses?.[0]?.emailAddress ?? null;
+      const quota = await checkQuota(pipelineRow.team_id, ownerEmail, pipelineRow.team_id);
+      if (quota.blocked) {
+        await queryOne(
+          "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
+          [run_id, `Monthly row limit reached (${quota.used.toLocaleString()} / ${quota.includedRows.toLocaleString()} rows on ${quota.plan} plan). Upgrade to continue.`]
+        );
+        return NextResponse.json({ error: "Quota exceeded" }, { status: 402 });
       }
       // AI spend cap check
       const aiSpend = await checkAiSpendCap(pipelineRow.team_id);
@@ -479,6 +478,10 @@ For every column in the profile, work through ALL of the following checks. Do no
   → normalize
 - Status fields, plan names, labels, tags with inconsistent casing?
   → normalize
+- IMPORTANT: When a column has a small known set of value variants (e.g. gender: "M"/"F"/"f"/"m"/"nb"; status: "c"/"p"/"canceled"/"cancelled"; country abbreviations), ALWAYS include a `value_map` in parameters mapping each observed lowercased variant to its canonical lowercase form.
+  Example for gender: `"parameters": { "value_map": { "m": "male", "f": "female", "nb": "non-binary", "x": "non-binary", "other": "other" } }`
+  Example for status: `"parameters": { "value_map": { "c": "cancelled", "canceled": "cancelled", "p": "pending", "a": "active" } }`
+  Rules: (1) keys must be lowercase. (2) canonical values must be lowercase. (3) only map variants visible in sample — never invent. (4) omit ambiguous mappings (e.g. "0"/"1" when gender direction unclear).
 
 ### G. Outliers & Invalid Values
 - outlier_count > 0 in the profile?
@@ -491,6 +494,9 @@ For every column in the profile, work through ALL of the following checks. Do no
     → filter to exclude them
   - Future dates in a "created_at" or "signup_date" column that should be historical?
     → filter with operator "lt" and today's date
+- When suggesting outlier_cap for a column with a known valid domain range, ALWAYS include explicit `min_val` and/or `max_val` in parameters instead of relying solely on IQR.
+  Examples: age → `"min_val": 0, "max_val": 120`; rating 1-5 → `"min_val": 1, "max_val": 5`; percentage → `"min_val": 0, "max_val": 100`; salary → `"min_val": 0` only (no upper cap — executive salaries are valid).
+  Only add bounds you are confident about from domain knowledge. Omit if the valid range is unknown.
 
 ### H. String Consistency & Formatting
 - Phone numbers in multiple formats ("555-0101", "(555) 0102", "555.0103", "5550109")?
