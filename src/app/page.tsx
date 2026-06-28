@@ -14,6 +14,7 @@ import {
   Clock,
   DollarSign,
 } from "lucide-react";
+import { CleanStackLogo } from "@/components/Logo";
 
 const features = [
   {
@@ -79,12 +80,7 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="sticky top-0 z-50 border-b border-gray-800/80 bg-gray-950/80 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <span className="flex items-center gap-2 text-xl font-bold text-white tracking-tight">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white">
-              <GitPullRequestArrow className="h-4 w-4" />
-            </span>
-            CleanStack
-          </span>
+          <CleanStackLogo iconSize={32} wordmarkClassName="text-xl" className="text-white" />
           <div className="flex items-center gap-6">
             <Link href="/templates" className="hidden sm:block text-sm text-gray-400 hover:text-white transition-colors">
               Templates
@@ -333,12 +329,7 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-gray-800">
         <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <span className="flex items-center gap-2 text-sm font-semibold text-white">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo-600 text-white">
-              <GitPullRequestArrow className="h-3.5 w-3.5" />
-            </span>
-            CleanStack
-          </span>
+          <CleanStackLogo iconSize={24} wordmarkClassName="text-sm" className="text-white" />
           <div className="flex items-center gap-6 text-sm text-gray-400">
             <Link href="/templates" className="hover:text-white transition-colors">Templates</Link>
             <Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link>
