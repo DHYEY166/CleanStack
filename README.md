@@ -1,5 +1,7 @@
 # CleanStack
 
+[![Demo Video](public/demo-thumb.png)](https://youtu.be/QqBv8HPTZPU)
+
 **AI-powered data pipeline automation for B2B teams.**
 
 CleanStack turns raw, messy data into clean, analytics-ready datasets through a multi-pass AI pipeline with a human-in-the-loop approval workflow — the "Data PR." Upload a CSV, Excel, JSON, PDF, DOCX, XML, or Parquet file. CleanStack profiles it, proposes a precise set of transform rules, routes them through a 3-agent AI committee, executes them on AWS Lambda, and delivers a quality-scored output. All in under two minutes.
