@@ -1,6 +1,6 @@
 # CleanStack
 
-[![Demo Video](public/demo-thumb.png)](https://youtu.be/QqBv8HPTZPU)
+[![Demo Video](public/demo-thumb.png)](https://youtu.be/rhsA_740Zgs)
 
 **AI-powered data pipeline automation for B2B teams.**
 
