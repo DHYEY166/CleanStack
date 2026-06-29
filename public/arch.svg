@@ -1,301 +1,328 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 700" width="1080" height="700" font-family="system-ui, -apple-system, sans-serif">
-  <rect width="1080" height="700" fill="#030712"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <!-- Arrow markers -->
+    <marker id="a-gray" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#4b5563"/></marker>
+    <marker id="a-blue" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#3b82f6"/></marker>
+    <marker id="a-orange" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#f97316"/></marker>
+    <marker id="a-purple" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#8b5cf6"/></marker>
+    <marker id="a-green" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#22c55e"/></marker>
+    <marker id="a-teal" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#14b8a6"/></marker>
+    <marker id="a-amber" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#f59e0b"/></marker>
+    <marker id="a-pink" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#ec4899"/></marker>
+  </defs>
 
-  <!-- Title -->
-  <text x="540" y="34" text-anchor="middle" fill="#f9fafb" font-size="17" font-weight="700">CleanStack — System Architecture</text>
-  <text x="540" y="52" text-anchor="middle" fill="#6b7280" font-size="10">Vercel (Next.js 15) · Aurora PostgreSQL · S3 · Lambda · SQS · SNS · EventBridge · Amazon Bedrock · Clerk</text>
+  <!-- Canvas background -->
+  <rect width="1200" height="640" fill="#0b0d14"/>
 
-  <!-- ── LANE BACKGROUNDS ── -->
-  <!-- USER -->
-  <rect x="28" y="64" width="1024" height="60" fill="#111827" rx="6"/>
-  <!-- VERCEL + AUTH -->
-  <rect x="28" y="132" width="1024" height="88" fill="#0f1729" rx="6"/>
-  <!-- AWS COMPUTE -->
-  <rect x="28" y="228" width="1024" height="80" fill="#111827" rx="6"/>
-  <!-- AWS DATA -->
-  <rect x="28" y="316" width="1024" height="80" fill="#0d1117" rx="6"/>
-  <!-- AI -->
-  <rect x="28" y="404" width="1024" height="64" fill="#0f1729" rx="6"/>
-  <!-- AUTO-CLEAN / RECONCILE note row -->
-  <rect x="28" y="476" width="1024" height="60" fill="#111827" rx="6"/>
+  <!-- ─────────────────────────────────────────────
+       TITLE
+  ───────────────────────────────────────────── -->
+  <text x="600" y="30" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="700" letter-spacing="0.5">CleanStack — System Architecture</text>
+  <text x="600" y="50" text-anchor="middle" fill="#475569" font-size="10">Vercel · Aurora PostgreSQL · Lambda · S3 · SQS · SNS · Bedrock · EventBridge · Clerk · Sentry · Upstash Redis · KMS · CloudTrail</text>
 
-  <!-- ── LANE LABELS ── -->
-  <text x="16" y="100" text-anchor="middle" fill="#374151" font-size="9" font-weight="700" transform="rotate(-90,16,100)">BROWSER</text>
-  <text x="16" y="182" text-anchor="middle" fill="#374151" font-size="9" font-weight="700" transform="rotate(-90,16,182)">VERCEL</text>
-  <text x="16" y="270" text-anchor="middle" fill="#374151" font-size="9" font-weight="700" transform="rotate(-90,16,270)">λ COMPUTE</text>
-  <text x="16" y="358" text-anchor="middle" fill="#374151" font-size="9" font-weight="700" transform="rotate(-90,16,358)">AWS DATA</text>
-  <text x="16" y="438" text-anchor="middle" fill="#374151" font-size="9" font-weight="700" transform="rotate(-90,16,438)">AI</text>
-  <text x="16" y="508" text-anchor="middle" fill="#374151" font-size="9" font-weight="700" transform="rotate(-90,16,508)">AUTO</text>
+  <!-- ─────────────────────────────────────────────
+       SECTION PANELS
+  ───────────────────────────────────────────── -->
+  <!-- Client & Auth -->
+  <rect x="14" y="66" width="218" height="148" rx="10" fill="#12121e" stroke="#312e81" stroke-width="1.5"/>
+  <text x="123" y="82" text-anchor="middle" fill="#6366f1" font-size="9" font-weight="700" letter-spacing="1">CLIENT &amp; AUTH</text>
 
-  <!-- ══════════════════════════════════════════════
-       ROW 1 — BROWSER ACTIONS
-  ══════════════════════════════════════════════ -->
+  <!-- Vercel -->
+  <rect x="244" y="66" width="370" height="148" rx="10" fill="#0a1628" stroke="#1e40af" stroke-width="1.5"/>
+  <text x="429" y="82" text-anchor="middle" fill="#60a5fa" font-size="9" font-weight="700" letter-spacing="1">VERCEL — NEXT.JS 15</text>
+
+  <!-- Observability -->
+  <rect x="626" y="66" width="270" height="148" rx="10" fill="#111118" stroke="#374151" stroke-width="1.5"/>
+  <text x="761" y="82" text-anchor="middle" fill="#6b7280" font-size="9" font-weight="700" letter-spacing="1">OBSERVABILITY</text>
+
+  <!-- Security -->
+  <rect x="908" y="66" width="278" height="148" rx="10" fill="#130a0a" stroke="#7f1d1d" stroke-width="1.5"/>
+  <text x="1047" y="82" text-anchor="middle" fill="#f87171" font-size="9" font-weight="700" letter-spacing="1">SECURITY</text>
+
+  <!-- AWS Core Pipeline -->
+  <rect x="14" y="232" width="1172" height="124" rx="10" fill="#0a150a" stroke="#166534" stroke-width="1.5"/>
+  <text x="600" y="248" text-anchor="middle" fill="#4ade80" font-size="9" font-weight="700" letter-spacing="1">AWS CORE PIPELINE</text>
+
+  <!-- AI & Scheduling -->
+  <rect x="14" y="374" width="618" height="110" rx="10" fill="#100d1f" stroke="#5b21b6" stroke-width="1.5"/>
+  <text x="323" y="390" text-anchor="middle" fill="#a78bfa" font-size="9" font-weight="700" letter-spacing="1">AI — AMAZON BEDROCK</text>
+
+  <!-- Alerts -->
+  <rect x="644" y="374" width="350" height="110" rx="10" fill="#0a1a14" stroke="#065f46" stroke-width="1.5"/>
+  <text x="819" y="390" text-anchor="middle" fill="#34d399" font-size="9" font-weight="700" letter-spacing="1">ALERTS</text>
+
+  <!-- Scheduling -->
+  <rect x="1006" y="374" width="180" height="110" rx="10" fill="#1a1208" stroke="#92400e" stroke-width="1.5"/>
+  <text x="1096" y="390" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="700" letter-spacing="1">SCHEDULE</text>
+
+  <!-- ─────────────────────────────────────────────
+       ROW 1 — CLIENT / VERCEL / OBSERVABILITY / SECURITY
+  ───────────────────────────────────────────── -->
 
   <!-- Browser -->
-  <rect x="44" y="76" width="76" height="38" rx="7" fill="#1f2937" stroke="#374151" stroke-width="1.5"/>
-  <text x="82" y="93" text-anchor="middle" fill="#d1d5db" font-size="10" font-weight="600">Browser</text>
-  <text x="82" y="106" text-anchor="middle" fill="#9ca3af" font-size="8">User</text>
-
-  <!-- Upload action -->
-  <rect x="178" y="76" width="100" height="38" rx="7" fill="#1f2937" stroke="#374151" stroke-width="1.5"/>
-  <text x="228" y="92" text-anchor="middle" fill="#d1d5db" font-size="10" font-weight="600">Upload File</text>
-  <text x="228" y="105" text-anchor="middle" fill="#9ca3af" font-size="8">/pipelines/new</text>
-
-  <!-- Data PR Review -->
-  <rect x="430" y="76" width="114" height="38" rx="7" fill="#1f2937" stroke="#6366f1" stroke-width="1.5"/>
-  <text x="487" y="92" text-anchor="middle" fill="#a5b4fc" font-size="10" font-weight="600">Data PR Review</text>
-  <text x="487" y="105" text-anchor="middle" fill="#818cf8" font-size="8">Approve / Reject rules</text>
-
-  <!-- Chat Builder -->
-  <rect x="660" y="76" width="100" height="38" rx="7" fill="#1f2937" stroke="#0d9488" stroke-width="1.5"/>
-  <text x="710" y="92" text-anchor="middle" fill="#5eead4" font-size="10" font-weight="600">Chat Builder</text>
-  <text x="710" y="105" text-anchor="middle" fill="#2dd4bf" font-size="8">Streaming SSE UI</text>
-
-  <!-- Run Detail -->
-  <rect x="878" y="76" width="110" height="38" rx="7" fill="#1f2937" stroke="#374151" stroke-width="1.5"/>
-  <text x="933" y="92" text-anchor="middle" fill="#d1d5db" font-size="10" font-weight="600">Run Detail</text>
-  <text x="933" y="105" text-anchor="middle" fill="#9ca3af" font-size="8">Quality · Drift · Download</text>
-
-  <!-- arrows row1 -->
-  <line x1="120" y1="95" x2="174" y2="95" stroke="#374151" stroke-width="1.5" marker-end="url(#ag)"/>
-  <line x1="278" y1="95" x2="426" y2="95" stroke="#374151" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ag)"/>
-  <line x1="588" y1="91" x2="656" y2="91" stroke="#374151" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ag)"/>
-  <line x1="760" y1="91" x2="874" y2="91" stroke="#374151" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#ag)"/>
-
-  <!-- ══════════════════════════════════════════════
-       ROW 2 — VERCEL / NEXT.JS + CLERK
-  ══════════════════════════════════════════════ -->
+  <rect x="24" y="90" width="96" height="56" rx="7" fill="#1e1b4b" stroke="#4338ca" stroke-width="1.5"/>
+  <circle cx="42" cy="110" r="8" fill="#4338ca"/>
+  <text x="42" y="114" text-anchor="middle" fill="#fff" font-size="8" font-weight="700">B</text>
+  <text x="84" y="109" text-anchor="middle" fill="#e0e7ff" font-size="10" font-weight="600">Browser</text>
+  <text x="84" y="123" text-anchor="middle" fill="#818cf8" font-size="8">User actions</text>
 
   <!-- Clerk -->
-  <rect x="44" y="146" width="76" height="60" rx="7" fill="#1a1a2e" stroke="#a855f7" stroke-width="1.5"/>
-  <text x="82" y="165" text-anchor="middle" fill="#e879f9" font-size="10" font-weight="600">Clerk</text>
-  <text x="82" y="178" text-anchor="middle" fill="#d946ef" font-size="8">JWT Auth</text>
-  <text x="82" y="191" text-anchor="middle" fill="#d946ef" font-size="8">Middleware</text>
+  <rect x="130" y="90" width="96" height="56" rx="7" fill="#1e1040" stroke="#7c3aed" stroke-width="1.5"/>
+  <circle cx="148" cy="110" r="8" fill="#7c3aed"/>
+  <text x="148" y="114" text-anchor="middle" fill="#fff" font-size="8" font-weight="700">C</text>
+  <text x="190" y="109" text-anchor="middle" fill="#ddd6fe" font-size="10" font-weight="600">Clerk</text>
+  <text x="190" y="123" text-anchor="middle" fill="#a78bfa" font-size="8">JWT · Middleware</text>
 
-  <!-- Next.js Upload API -->
-  <rect x="158" y="146" width="118" height="60" rx="7" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="217" y="163" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="700">Next.js</text>
-  <text x="217" y="176" text-anchor="middle" fill="#60a5fa" font-size="8">/api/upload</text>
-  <text x="217" y="188" text-anchor="middle" fill="#60a5fa" font-size="8">/api/run-status</text>
-  <text x="217" y="200" text-anchor="middle" fill="#60a5fa" font-size="8">/webhooks/profile-done</text>
+  <!-- Next.js box -->
+  <rect x="254" y="90" width="350" height="112" rx="7" fill="#0d2045" stroke="#2563eb" stroke-width="1.5"/>
+  <rect x="254" y="90" width="6" height="112" rx="3" fill="#2563eb"/>
+  <text x="296" y="108" fill="#93c5fd" font-size="11" font-weight="700">Next.js API Routes</text>
+  <text x="270" y="124" fill="#60a5fa" font-size="8">▸ /api/upload  · /api/pipelines</text>
+  <text x="270" y="138" fill="#60a5fa" font-size="8">▸ /api/suggest-transforms  · /api/auto-validate</text>
+  <text x="270" y="152" fill="#60a5fa" font-size="8">▸ /api/approve-rules  · /api/chat-builder (SSE)</text>
+  <text x="270" y="166" fill="#60a5fa" font-size="8">▸ /api/reconciler  · /webhooks/profile-done</text>
+  <text x="270" y="180" fill="#3b82f6" font-size="8">▸ Vercel AI SDK · maxDuration=120</text>
 
-  <!-- Next.js AI Routes -->
-  <rect x="370" y="146" width="148" height="60" rx="7" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="444" y="163" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="700">Next.js AI Routes</text>
-  <text x="444" y="176" text-anchor="middle" fill="#60a5fa" font-size="8">/api/suggest-transforms</text>
-  <text x="444" y="188" text-anchor="middle" fill="#60a5fa" font-size="8">/api/auto-validate (AI committee)</text>
-  <text x="444" y="200" text-anchor="middle" fill="#60a5fa" font-size="8">/api/approve-rules → SQS</text>
+  <!-- Sentry -->
+  <rect x="636" y="90" width="120" height="56" rx="7" fill="#1e0a2e" stroke="#9333ea" stroke-width="1.5"/>
+  <rect x="636" y="90" width="5" height="56" rx="2" fill="#9333ea"/>
+  <text x="706" y="109" text-anchor="middle" fill="#d8b4fe" font-size="10" font-weight="600">Sentry</text>
+  <text x="706" y="123" text-anchor="middle" fill="#a855f7" font-size="8">Error monitoring</text>
+  <text x="706" y="136" text-anchor="middle" fill="#a855f7" font-size="8">@sentry/nextjs v10</text>
 
-  <!-- Next.js Chat Builder -->
-  <rect x="640" y="146" width="120" height="60" rx="7" fill="#1e3a5f" stroke="#0d9488" stroke-width="1.5"/>
-  <text x="700" y="163" text-anchor="middle" fill="#5eead4" font-size="10" font-weight="700">Chat Builder</text>
-  <text x="700" y="176" text-anchor="middle" fill="#2dd4bf" font-size="8">/api/chat-builder</text>
-  <text x="700" y="188" text-anchor="middle" fill="#2dd4bf" font-size="8">Vercel AI SDK</text>
-  <text x="700" y="200" text-anchor="middle" fill="#2dd4bf" font-size="8">Streaming SSE</text>
+  <!-- Upstash Redis -->
+  <rect x="768" y="90" width="120" height="56" rx="7" fill="#002a1a" stroke="#059669" stroke-width="1.5"/>
+  <rect x="768" y="90" width="5" height="56" rx="2" fill="#059669"/>
+  <text x="838" y="109" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="600">Upstash Redis</text>
+  <text x="838" y="123" text-anchor="middle" fill="#34d399" font-size="8">Rate limiting</text>
+  <text x="838" y="136" text-anchor="middle" fill="#34d399" font-size="8">Quota cache (60s TTL)</text>
 
-  <!-- Next.js Reconciler -->
-  <rect x="878" y="146" width="110" height="60" rx="7" fill="#1e3a5f" stroke="#f59e0b" stroke-width="1.5"/>
-  <text x="933" y="163" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="700">Reconciler</text>
-  <text x="933" y="176" text-anchor="middle" fill="#fbbf24" font-size="8">/api/reconciler</text>
-  <text x="933" y="188" text-anchor="middle" fill="#fbbf24" font-size="8">stuck run recovery</text>
-  <text x="933" y="200" text-anchor="middle" fill="#fbbf24" font-size="8">→ re-queues SQS</text>
+  <!-- KMS -->
+  <rect x="918" y="90" width="110" height="56" rx="7" fill="#1f0a0a" stroke="#dc2626" stroke-width="1.5"/>
+  <rect x="918" y="90" width="5" height="56" rx="2" fill="#dc2626"/>
+  <text x="978" y="109" text-anchor="middle" fill="#fca5a5" font-size="10" font-weight="600">AWS KMS</text>
+  <text x="978" y="123" text-anchor="middle" fill="#f87171" font-size="8">S3 SSE-KMS</text>
+  <text x="978" y="136" text-anchor="middle" fill="#f87171" font-size="8">Encryption at rest</text>
 
-  <!-- Clerk covers all routes -->
-  <line x1="120" y1="176" x2="154" y2="176" stroke="#a855f7" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#ap)"/>
+  <!-- CloudTrail -->
+  <rect x="1042" y="90" width="138" height="56" rx="7" fill="#1f0a0a" stroke="#b91c1c" stroke-width="1.5"/>
+  <rect x="1042" y="90" width="5" height="56" rx="2" fill="#b91c1c"/>
+  <text x="1116" y="109" text-anchor="middle" fill="#fca5a5" font-size="10" font-weight="600">CloudTrail</text>
+  <text x="1116" y="123" text-anchor="middle" fill="#f87171" font-size="8">API audit logging</text>
+  <text x="1116" y="136" text-anchor="middle" fill="#f87171" font-size="8">All AWS API calls</text>
 
-  <!-- Browser → Clerk -->
-  <line x1="82" y1="114" x2="82" y2="142" stroke="#a855f7" stroke-width="1.5" marker-end="url(#ap)"/>
-  <!-- Browser/Upload → Next.js upload -->
-  <line x1="217" y1="114" x2="217" y2="142" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
-  <!-- Browser/DataPR → Next.js AI Routes -->
-  <line x1="487" y1="114" x2="487" y2="142" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#ab)"/>
-  <!-- Browser/Chat → Chat Builder route -->
-  <line x1="710" y1="114" x2="710" y2="142" stroke="#0d9488" stroke-width="1.5" marker-end="url(#at)"/>
-
-  <!-- ══════════════════════════════════════════════
-       ROW 3 — LAMBDA COMPUTE
-  ══════════════════════════════════════════════ -->
-
-  <!-- Lambda Profiler -->
-  <rect x="158" y="240" width="118" height="56" rx="7" fill="#2a1f0f" stroke="#d97706" stroke-width="1.5"/>
-  <text x="217" y="258" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="600">λ Profiler</text>
-  <text x="217" y="271" text-anchor="middle" fill="#fbbf24" font-size="8">S3 PUT trigger</text>
-  <text x="217" y="284" text-anchor="middle" fill="#fbbf24" font-size="8">9 formats · quality score</text>
-
-  <!-- Lambda Executor -->
-  <rect x="580" y="240" width="118" height="56" rx="7" fill="#2a1f0f" stroke="#d97706" stroke-width="1.5"/>
-  <text x="639" y="258" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="600">λ Executor</text>
-  <text x="639" y="271" text-anchor="middle" fill="#fbbf24" font-size="8">SQS trigger · pandas</text>
-  <text x="639" y="284" text-anchor="middle" fill="#fbbf24" font-size="8">transforms + drift check</text>
-
-  <!-- Lambda Drift -->
-  <rect x="820" y="240" width="108" height="56" rx="7" fill="#1c2a1c" stroke="#0d9488" stroke-width="1.5"/>
-  <text x="874" y="258" text-anchor="middle" fill="#5eead4" font-size="10" font-weight="600">λ Drift Alert</text>
-  <text x="874" y="271" text-anchor="middle" fill="#2dd4bf" font-size="8">SNS trigger</text>
-  <text x="874" y="284" text-anchor="middle" fill="#2dd4bf" font-size="8">→ Slack webhook</text>
-
-  <!-- Next.js → Lambda Profiler (webhook call down) -->
-  <line x1="217" y1="206" x2="217" y2="236" stroke="#d97706" stroke-width="1.5" marker-end="url(#ao)"/>
-  <!-- Lambda Executor ← SQS (from row 4) drawn below -->
-  <!-- Lambda Drift ← SNS (from row 4) drawn below -->
-
-  <!-- ══════════════════════════════════════════════
-       ROW 4 — AWS DATA LAYER
-  ══════════════════════════════════════════════ -->
+  <!-- ─────────────────────────────────────────────
+       ROW 2 — AWS CORE PIPELINE
+  ───────────────────────────────────────────── -->
 
   <!-- S3 Raw -->
-  <rect x="44" y="328" width="90" height="56" rx="7" fill="#1c2a1c" stroke="#16a34a" stroke-width="1.5"/>
-  <text x="89" y="348" text-anchor="middle" fill="#86efac" font-size="10" font-weight="600">S3 Raw</text>
-  <text x="89" y="361" text-anchor="middle" fill="#4ade80" font-size="8">SSE-KMS</text>
-  <text x="89" y="374" text-anchor="middle" fill="#4ade80" font-size="8">presigned PUT</text>
+  <rect x="24" y="254" width="120" height="84" rx="7" fill="#0a2010" stroke="#16a34a" stroke-width="1.5"/>
+  <rect x="24" y="254" width="5" height="84" rx="2" fill="#16a34a"/>
+  <text x="84" y="274" text-anchor="middle" fill="#86efac" font-size="10" font-weight="700">S3 Raw</text>
+  <text x="84" y="289" text-anchor="middle" fill="#4ade80" font-size="8">SSE-KMS encrypted</text>
+  <text x="84" y="302" text-anchor="middle" fill="#4ade80" font-size="8">Presigned PUT</text>
+  <text x="84" y="315" text-anchor="middle" fill="#4ade80" font-size="8">cleanstack-raw-*</text>
+
+  <!-- Lambda Profiler -->
+  <rect x="158" y="254" width="136" height="84" rx="7" fill="#1e1208" stroke="#f97316" stroke-width="1.5"/>
+  <rect x="158" y="254" width="5" height="84" rx="2" fill="#f97316"/>
+  <text x="226" y="274" text-anchor="middle" fill="#fed7aa" font-size="10" font-weight="700">λ Profiler</text>
+  <text x="226" y="289" text-anchor="middle" fill="#fb923c" font-size="8">S3 PUT trigger</text>
+  <text x="226" y="302" text-anchor="middle" fill="#fb923c" font-size="8">9 formats · quality score</text>
+  <text x="226" y="315" text-anchor="middle" fill="#fb923c" font-size="8">0–100 scoring model</text>
 
   <!-- Aurora PG -->
-  <rect x="294" y="328" width="120" height="56" rx="7" fill="#1a1040" stroke="#7c3aed" stroke-width="1.5"/>
-  <text x="354" y="348" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="600">Aurora PG</text>
-  <text x="354" y="361" text-anchor="middle" fill="#a78bfa" font-size="8">RDS Data API</text>
-  <text x="354" y="374" text-anchor="middle" fill="#a78bfa" font-size="8">pipelines · runs · rules · profiles</text>
+  <rect x="308" y="254" width="148" height="84" rx="7" fill="#0d0a28" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect x="308" y="254" width="5" height="84" rx="2" fill="#7c3aed"/>
+  <text x="382" y="274" text-anchor="middle" fill="#ddd6fe" font-size="10" font-weight="700">Aurora PG</text>
+  <text x="382" y="289" text-anchor="middle" fill="#a78bfa" font-size="8">RDS Data API (HTTP)</text>
+  <text x="382" y="302" text-anchor="middle" fill="#a78bfa" font-size="8">pipelines · runs · rules</text>
+  <text x="382" y="315" text-anchor="middle" fill="#a78bfa" font-size="8">profiles · subscriptions</text>
 
   <!-- SQS -->
-  <rect x="490" y="328" width="90" height="56" rx="7" fill="#1c1c2a" stroke="#6366f1" stroke-width="1.5"/>
-  <text x="535" y="348" text-anchor="middle" fill="#a5b4fc" font-size="10" font-weight="600">SQS</text>
-  <text x="535" y="361" text-anchor="middle" fill="#818cf8" font-size="8">executor-queue</text>
-  <text x="535" y="374" text-anchor="middle" fill="#818cf8" font-size="8">at-least-once</text>
+  <rect x="470" y="254" width="116" height="84" rx="7" fill="#0a0a28" stroke="#6366f1" stroke-width="1.5"/>
+  <rect x="470" y="254" width="5" height="84" rx="2" fill="#6366f1"/>
+  <text x="528" y="274" text-anchor="middle" fill="#c7d2fe" font-size="10" font-weight="700">SQS</text>
+  <text x="528" y="289" text-anchor="middle" fill="#818cf8" font-size="8">executor-queue</text>
+  <text x="528" y="302" text-anchor="middle" fill="#818cf8" font-size="8">at-least-once</text>
+  <text x="528" y="315" text-anchor="middle" fill="#818cf8" font-size="8">post-approval trigger</text>
+
+  <!-- Lambda Executor -->
+  <rect x="600" y="254" width="150" height="84" rx="7" fill="#1e1208" stroke="#f97316" stroke-width="1.5"/>
+  <rect x="600" y="254" width="5" height="84" rx="2" fill="#f97316"/>
+  <text x="675" y="274" text-anchor="middle" fill="#fed7aa" font-size="10" font-weight="700">λ Executor</text>
+  <text x="675" y="289" text-anchor="middle" fill="#fb923c" font-size="8">SQS trigger · pandas</text>
+  <text x="675" y="302" text-anchor="middle" fill="#fb923c" font-size="8">Apply transforms</text>
+  <text x="675" y="315" text-anchor="middle" fill="#fb923c" font-size="8">Schema drift detection</text>
 
   <!-- S3 Processed -->
-  <rect x="660" y="328" width="96" height="56" rx="7" fill="#1c2a1c" stroke="#16a34a" stroke-width="1.5"/>
-  <text x="708" y="348" text-anchor="middle" fill="#86efac" font-size="10" font-weight="600">S3 Processed</text>
-  <text x="708" y="361" text-anchor="middle" fill="#4ade80" font-size="8">SSE-KMS</text>
-  <text x="708" y="374" text-anchor="middle" fill="#4ade80" font-size="8">cleaned output</text>
+  <rect x="764" y="254" width="136" height="84" rx="7" fill="#0a2010" stroke="#16a34a" stroke-width="1.5"/>
+  <rect x="764" y="254" width="5" height="84" rx="2" fill="#16a34a"/>
+  <text x="832" y="274" text-anchor="middle" fill="#86efac" font-size="10" font-weight="700">S3 Processed</text>
+  <text x="832" y="289" text-anchor="middle" fill="#4ade80" font-size="8">SSE-KMS encrypted</text>
+  <text x="832" y="302" text-anchor="middle" fill="#4ade80" font-size="8">Cleaned output</text>
+  <text x="832" y="315" text-anchor="middle" fill="#4ade80" font-size="8">Presigned GET</text>
 
   <!-- SNS -->
-  <rect x="820" y="328" width="108" height="56" rx="7" fill="#1c2a2a" stroke="#0d9488" stroke-width="1.5"/>
-  <text x="874" y="348" text-anchor="middle" fill="#5eead4" font-size="10" font-weight="600">SNS</text>
-  <text x="874" y="361" text-anchor="middle" fill="#2dd4bf" font-size="8">drift-alerts topic</text>
-  <text x="874" y="374" text-anchor="middle" fill="#2dd4bf" font-size="8">→ λ Drift</text>
+  <rect x="914" y="254" width="120" height="84" rx="7" fill="#0a1a14" stroke="#14b8a6" stroke-width="1.5"/>
+  <rect x="914" y="254" width="5" height="84" rx="2" fill="#14b8a6"/>
+  <text x="974" y="274" text-anchor="middle" fill="#99f6e4" font-size="10" font-weight="700">SNS</text>
+  <text x="974" y="289" text-anchor="middle" fill="#2dd4bf" font-size="8">drift-alerts topic</text>
+  <text x="974" y="302" text-anchor="middle" fill="#2dd4bf" font-size="8">Fan-out to Lambda</text>
+  <text x="974" y="315" text-anchor="middle" fill="#2dd4bf" font-size="8">+ email subscription</text>
+
+  <!-- Lambda Drift -->
+  <rect x="1048" y="254" width="132" height="84" rx="7" fill="#1e1208" stroke="#f97316" stroke-width="1.5"/>
+  <rect x="1048" y="254" width="5" height="84" rx="2" fill="#f97316"/>
+  <text x="1114" y="274" text-anchor="middle" fill="#fed7aa" font-size="10" font-weight="700">λ Drift Alert</text>
+  <text x="1114" y="289" text-anchor="middle" fill="#fb923c" font-size="8">SNS trigger</text>
+  <text x="1114" y="302" text-anchor="middle" fill="#fb923c" font-size="8">Schema hash compare</text>
+  <text x="1114" y="315" text-anchor="middle" fill="#fb923c" font-size="8">→ Slack webhook</text>
+
+  <!-- ─────────────────────────────────────────────
+       ROW 3 — AI / ALERTS / SCHEDULING
+  ───────────────────────────────────────────── -->
+
+  <!-- Bedrock -->
+  <rect x="24" y="396" width="598" height="76" rx="7" fill="#150d30" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect x="24" y="396" width="5" height="76" rx="2" fill="#7c3aed"/>
+  <text x="60" y="418" fill="#ddd6fe" font-size="11" font-weight="700">Amazon Bedrock — Claude Sonnet 4.6</text>
+  <text x="60" y="434" fill="#a78bfa" font-size="8">us.anthropic.claude-sonnet-4-6</text>
+  <text x="60" y="450" fill="#8b5cf6" font-size="8">▸ suggest-transforms (structured JSON rules)</text>
+  <text x="60" y="462" fill="#8b5cf6" font-size="8">▸ AI committee: Safety Auditor · Statistician · Domain Validator (3× parallel)</text>
+  <text x="330" y="450" fill="#8b5cf6" font-size="8">▸ Chat Builder streaming (SSE via Vercel AI SDK)</text>
+  <text x="330" y="462" fill="#8b5cf6" font-size="8">▸ Row-based metered: Free 50K · Pro 1M · Team 10M rows/mo</text>
+
+  <!-- Slack -->
+  <rect x="654" y="396" width="160" height="76" rx="7" fill="#0e0e1f" stroke="#4f46e5" stroke-width="1.5"/>
+  <rect x="654" y="396" width="5" height="76" rx="2" fill="#4f46e5"/>
+  <text x="734" y="418" text-anchor="middle" fill="#c7d2fe" font-size="10" font-weight="700">Slack</text>
+  <text x="734" y="434" text-anchor="middle" fill="#818cf8" font-size="8">Incoming webhook</text>
+  <text x="734" y="448" text-anchor="middle" fill="#818cf8" font-size="8">Schema drift alerts</text>
+  <text x="734" y="462" text-anchor="middle" fill="#818cf8" font-size="8">Real-time notifications</text>
+
+  <!-- Auto-Clean note -->
+  <rect x="828" y="396" width="160" height="76" rx="7" fill="#0a1a0a" stroke="#16a34a" stroke-width="1.5"/>
+  <rect x="828" y="396" width="5" height="76" rx="2" fill="#16a34a"/>
+  <text x="908" y="418" text-anchor="middle" fill="#86efac" font-size="10" font-weight="700">Auto-Clean</text>
+  <text x="908" y="434" text-anchor="middle" fill="#4ade80" font-size="8">Up to 3 passes</text>
+  <text x="908" y="448" text-anchor="middle" fill="#4ade80" font-size="8">Diminishing-returns stop</text>
+  <text x="908" y="462" text-anchor="middle" fill="#4ade80" font-size="8">(&lt;5% gain threshold)</text>
 
   <!-- EventBridge -->
-  <rect x="960" y="328" width="82" height="56" rx="7" fill="#1f1a10" stroke="#f59e0b" stroke-width="1.5"/>
-  <text x="1001" y="345" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="600">EventBridge</text>
-  <text x="1001" y="358" text-anchor="middle" fill="#fbbf24" font-size="8">every 5 min</text>
-  <text x="1001" y="371" text-anchor="middle" fill="#fbbf24" font-size="8">→ Reconciler</text>
+  <rect x="1016" y="396" width="164" height="76" rx="7" fill="#1a1000" stroke="#d97706" stroke-width="1.5"/>
+  <rect x="1016" y="396" width="5" height="76" rx="2" fill="#d97706"/>
+  <text x="1098" y="418" text-anchor="middle" fill="#fde68a" font-size="10" font-weight="700">EventBridge</text>
+  <text x="1098" y="434" text-anchor="middle" fill="#fbbf24" font-size="8">Cron: every 5 min</text>
+  <text x="1098" y="448" text-anchor="middle" fill="#fbbf24" font-size="8">→ /api/reconciler</text>
+  <text x="1098" y="462" text-anchor="middle" fill="#fbbf24" font-size="8">Stuck run recovery</text>
 
-  <!-- DATA FLOW ARROWS — ROW 3 ↔ ROW 4 -->
-  <!-- Browser presigned → S3 Raw -->
-  <line x1="178" y1="100" x2="100" y2="328" stroke="#16a34a" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#ag2)"/>
-  <!-- S3 Raw → Lambda Profiler -->
-  <line x1="134" y1="356" x2="154" y2="280" stroke="#d97706" stroke-width="1.5" marker-end="url(#ao)"/>
-  <!-- Lambda Profiler → Aurora -->
-  <line x1="260" y1="284" x2="330" y2="328" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#av)"/>
-  <!-- Lambda Profiler → webhook → Next.js AI Routes -->
-  <line x1="276" y1="260" x2="366" y2="206" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#ab)"/>
-  <!-- Aurora → SQS (approve triggers) -->
-  <line x1="414" y1="356" x2="486" y2="356" stroke="#6366f1" stroke-width="1.5" marker-end="url(#ai)"/>
-  <!-- SQS → Lambda Executor -->
-  <line x1="535" y1="328" x2="610" y2="296" stroke="#d97706" stroke-width="1.5" marker-end="url(#ao)"/>
-  <!-- Lambda Executor → S3 Processed -->
-  <line x1="680" y1="268" x2="714" y2="324" stroke="#16a34a" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#ag2)"/>
-  <!-- Lambda Executor → Aurora (re-profile) -->
-  <line x1="600" y1="296" x2="414" y2="344" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#av)"/>
-  <!-- Lambda Executor → SNS -->
-  <line x1="698" y1="268" x2="850" y2="328" stroke="#0d9488" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#at)"/>
-  <!-- SNS → Lambda Drift -->
-  <line x1="874" y1="328" x2="874" y2="296" stroke="#0d9488" stroke-width="1.5" marker-end="url(#at)"/>
-  <!-- EventBridge → Reconciler (Next.js) -->
-  <line x1="1001" y1="328" x2="988" y2="206" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#af)"/>
-  <!-- Reconciler → SQS -->
-  <line x1="933" y1="206" x2="580" y2="368" stroke="#6366f1" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#ai)"/>
+  <!-- ─────────────────────────────────────────────
+       ARROWS — ROW 1
+  ───────────────────────────────────────────── -->
+  <!-- Browser → Next.js -->
+  <line x1="120" y1="118" x2="250" y2="118" stroke="#6366f1" stroke-width="1.5" marker-end="url(#a-blue)"/>
+  <text x="185" y="113" text-anchor="middle" fill="#4b5563" font-size="7">API calls</text>
 
-  <!-- ══════════════════════════════════════════════
-       ROW 5 — AI / AMAZON BEDROCK
-  ══════════════════════════════════════════════ -->
+  <!-- Clerk → Next.js (auth guard) -->
+  <line x1="226" y1="118" x2="250" y2="118" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#a-purple)"/>
 
-  <!-- Amazon Bedrock -->
-  <rect x="186" y="416" width="520" height="42" rx="7" fill="#1a1631" stroke="#8b5cf6" stroke-width="1.5"/>
-  <text x="446" y="434" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="700">Amazon Bedrock — Claude Sonnet 4.6 (us.anthropic.claude-sonnet-4-6)</text>
-  <text x="446" y="449" text-anchor="middle" fill="#a78bfa" font-size="8">suggest-transforms · AI committee (3× parallel: Safety Auditor, Statistician, Domain Validator) · Chat Builder streaming</text>
+  <!-- Next.js ↔ Upstash Redis -->
+  <line x1="604" y1="118" x2="764" y2="118" stroke="#059669" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#a-green)"/>
+  <text x="684" y="113" text-anchor="middle" fill="#4b5563" font-size="7">rate limit / cache</text>
 
-  <!-- Next.js AI Routes → Bedrock -->
-  <line x1="444" y1="206" x2="420" y2="412" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#apu)"/>
-  <!-- Chat Builder → Bedrock -->
-  <line x1="700" y1="206" x2="620" y2="412" stroke="#8b5cf6" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#apu)"/>
-  <!-- Bedrock → Aurora (rules written) -->
-  <line x1="354" y1="416" x2="354" y2="384" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#av)"/>
+  <!-- Next.js → Sentry (errors) -->
+  <line x1="604" y1="105" x2="632" y2="105" stroke="#9333ea" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#a-purple)"/>
+  <text x="618" y="100" text-anchor="middle" fill="#4b5563" font-size="7">errors</text>
 
-  <!-- ══════════════════════════════════════════════
-       ROW 6 — AUTO-CLEAN + KEY METRICS
-  ══════════════════════════════════════════════ -->
+  <!-- ─────────────────────────────────────────────
+       ARROWS — ROW 1 → ROW 2
+  ───────────────────────────────────────────── -->
+  <!-- Browser → S3 Raw (presigned PUT, diagonal) -->
+  <path d="M 72 146 Q 72 200 80 254" stroke="#16a34a" stroke-width="1.2" stroke-dasharray="5,3" fill="none" marker-end="url(#a-green)"/>
+  <text x="56" y="200" fill="#4b5563" font-size="7" text-anchor="middle">presigned</text>
+  <text x="56" y="210" fill="#4b5563" font-size="7" text-anchor="middle">PUT</text>
 
-  <!-- Auto-clean box -->
-  <rect x="44" y="488" width="220" height="38" rx="7" fill="#1c2a1c" stroke="#10b981" stroke-width="1.5"/>
-  <text x="154" y="504" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="600">Auto-Clean (Phase 15+16)</text>
-  <text x="154" y="517" text-anchor="middle" fill="#34d399" font-size="8">up to 3 passes · diminishing-returns stop (&lt;5% gain)</text>
+  <!-- Next.js → Aurora (read/write) -->
+  <path d="M 382 202 L 382 254" stroke="#7c3aed" stroke-width="1.5" fill="none" marker-end="url(#a-purple)"/>
+  <text x="398" y="232" fill="#4b5563" font-size="7">read/write</text>
 
-  <!-- Billing / quota box -->
-  <rect x="284" y="488" width="200" height="38" rx="7" fill="#1a1040" stroke="#7c3aed" stroke-width="1.5"/>
-  <text x="384" y="504" text-anchor="middle" fill="#c4b5fd" font-size="10" font-weight="600">Row-based Billing</text>
-  <text x="384" y="517" text-anchor="middle" fill="#a78bfa" font-size="8">Free 50K · Pro 1M · Team 10M rows/mo</text>
+  <!-- Next.js → SQS (approve) -->
+  <path d="M 528 202 L 528 254" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4,3" fill="none" marker-end="url(#a-blue)"/>
+  <text x="546" y="232" fill="#4b5563" font-size="7">on approve</text>
 
-  <!-- Training Export box -->
-  <rect x="504" y="488" width="200" height="38" rx="7" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5"/>
-  <text x="604" y="504" text-anchor="middle" fill="#93c5fd" font-size="10" font-weight="600">Training Export</text>
-  <text x="604" y="517" text-anchor="middle" fill="#60a5fa" font-size="8">JSONL · Alpaca · Chat format</text>
+  <!-- ─────────────────────────────────────────────
+       ARROWS — ROW 2 HORIZONTAL (pipeline)
+  ───────────────────────────────────────────── -->
+  <!-- S3 Raw → λ Profiler -->
+  <line x1="144" y1="296" x2="154" y2="296" stroke="#f97316" stroke-width="2" marker-end="url(#a-orange)"/>
+  <text x="149" y="290" text-anchor="middle" fill="#4b5563" font-size="7">trigger</text>
 
-  <!-- KMS / Security box -->
-  <rect x="724" y="488" width="200" height="38" rx="7" fill="#1c2a1c" stroke="#16a34a" stroke-width="1.5"/>
-  <text x="824" y="504" text-anchor="middle" fill="#86efac" font-size="10" font-weight="600">Security</text>
-  <text x="824" y="517" text-anchor="middle" fill="#4ade80" font-size="8">S3 SSE-KMS · IAM roles · rate limiting</text>
+  <!-- λ Profiler → Aurora -->
+  <line x1="294" y1="296" x2="304" y2="296" stroke="#7c3aed" stroke-width="2" marker-end="url(#a-purple)"/>
+  <text x="299" y="290" text-anchor="middle" fill="#4b5563" font-size="7">profile</text>
 
-  <!-- ══════════════════════════════════════════════
+  <!-- Aurora → SQS -->
+  <line x1="456" y1="296" x2="466" y2="296" stroke="#6366f1" stroke-width="2" marker-end="url(#a-blue)"/>
+  <text x="461" y="290" text-anchor="middle" fill="#4b5563" font-size="7">queue</text>
+
+  <!-- SQS → λ Executor -->
+  <line x1="586" y1="296" x2="596" y2="296" stroke="#f97316" stroke-width="2" marker-end="url(#a-orange)"/>
+  <text x="591" y="290" text-anchor="middle" fill="#4b5563" font-size="7">trigger</text>
+
+  <!-- λ Executor → S3 Processed -->
+  <line x1="750" y1="296" x2="760" y2="296" stroke="#16a34a" stroke-width="2" marker-end="url(#a-green)"/>
+  <text x="755" y="290" text-anchor="middle" fill="#4b5563" font-size="7">write</text>
+
+  <!-- S3 Processed → SNS (drift) -->
+  <line x1="900" y1="296" x2="910" y2="296" stroke="#14b8a6" stroke-width="2" marker-end="url(#a-teal)"/>
+  <text x="905" y="290" text-anchor="middle" fill="#4b5563" font-size="7">drift</text>
+
+  <!-- SNS → λ Drift -->
+  <line x1="1034" y1="296" x2="1044" y2="296" stroke="#f97316" stroke-width="2" marker-end="url(#a-orange)"/>
+  <text x="1039" y="290" text-anchor="middle" fill="#4b5563" font-size="7">invoke</text>
+
+  <!-- ─────────────────────────────────────────────
+       ARROWS — ROW 2 → ROW 3 (vertical downs)
+  ───────────────────────────────────────────── -->
+  <!-- λ Profiler → Next.js (webhook up) -->
+  <path d="M 226 254 Q 226 210 429 202" stroke="#3b82f6" stroke-width="1.2" stroke-dasharray="4,3" fill="none" marker-end="url(#a-blue)"/>
+  <text x="290" y="222" fill="#4b5563" font-size="7">webhook → suggest-transforms</text>
+
+  <!-- λ Executor → Aurora (re-profile) -->
+  <path d="M 660 338 Q 660 360 382 338" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="4,3" fill="none" marker-end="url(#a-purple)"/>
+  <text x="520" y="354" text-anchor="middle" fill="#4b5563" font-size="7">re-profile write</text>
+
+  <!-- Next.js → Bedrock (AI calls) -->
+  <path d="M 429 202 L 429 374 L 250 374 L 250 396" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="5,3" fill="none" marker-end="url(#a-purple)"/>
+  <text x="330" y="370" text-anchor="middle" fill="#4b5563" font-size="7">AI calls (suggest · committee · chat)</text>
+
+  <!-- λ Drift → Slack -->
+  <path d="M 1114 338 Q 1114 370 834 438" stroke="#4f46e5" stroke-width="1.2" stroke-dasharray="5,3" fill="none" marker-end="url(#a-blue)"/>
+  <text x="980" y="395" text-anchor="middle" fill="#4b5563" font-size="7">Slack webhook</text>
+
+  <!-- EventBridge → Next.js (reconciler) -->
+  <path d="M 1098 374 Q 1098 220 604 160" stroke="#d97706" stroke-width="1.2" stroke-dasharray="5,3" fill="none" marker-end="url(#a-amber)"/>
+  <text x="890" y="255" text-anchor="middle" fill="#4b5563" font-size="7">5-min reconciler</text>
+
+  <!-- ─────────────────────────────────────────────
        LEGEND
-  ══════════════════════════════════════════════ -->
-  <rect x="28" y="548" width="1024" height="20" rx="4" fill="#111827"/>
-  <text x="44" y="562" fill="#374151" font-size="9">─── Sync</text>
-  <text x="108" y="562" fill="#374151" font-size="9">- - - Async</text>
-  <text x="170" y="562" fill="#3b82f6" font-size="9">■ Vercel/Next.js</text>
-  <text x="268" y="562" fill="#d97706" font-size="9">■ Lambda</text>
-  <text x="334" y="562" fill="#7c3aed" font-size="9">■ Aurora PG</text>
-  <text x="408" y="562" fill="#16a34a" font-size="9">■ S3</text>
-  <text x="440" y="562" fill="#6366f1" font-size="9">■ SQS</text>
-  <text x="476" y="562" fill="#0d9488" font-size="9">■ SNS/Drift</text>
-  <text x="540" y="562" fill="#f59e0b" font-size="9">■ EventBridge</text>
-  <text x="618" y="562" fill="#8b5cf6" font-size="9">■ Bedrock/Claude</text>
-  <text x="710" y="562" fill="#a855f7" font-size="9">■ Clerk</text>
-  <text x="754" y="562" fill="#10b981" font-size="9">■ Auto-Clean</text>
-  <text x="836" y="562" fill="#6b7280" font-size="9">Tested across 17 industry domains · avg +18.1 quality pts</text>
+  ───────────────────────────────────────────── -->
+  <rect x="14" y="504" width="1172" height="28" rx="5" fill="#111318"/>
+  <text x="30" y="522" fill="#374151" font-size="8">─── Sync</text>
+  <text x="90" y="522" fill="#374151" font-size="8">- - - Async / background</text>
+  <text x="210" y="522" fill="#f97316" font-size="8">■ Lambda (Python 3.12)</text>
+  <text x="330" y="522" fill="#7c3aed" font-size="8">■ Aurora PostgreSQL (RDS Data API)</text>
+  <text x="520" y="522" fill="#16a34a" font-size="8">■ S3 (SSE-KMS)</text>
+  <text x="610" y="522" fill="#6366f1" font-size="8">■ SQS</text>
+  <text x="648" y="522" fill="#14b8a6" font-size="8">■ SNS</text>
+  <text x="686" y="522" fill="#8b5cf6" font-size="8">■ Bedrock / Claude</text>
+  <text x="790" y="522" fill="#d97706" font-size="8">■ EventBridge</text>
+  <text x="862" y="522" fill="#3b82f6" font-size="8">■ Vercel / Next.js</text>
+  <text x="948" y="522" fill="#dc2626" font-size="8">■ KMS · CloudTrail</text>
+  <text x="1050" y="522" fill="#059669" font-size="8">■ Upstash Redis</text>
+  <text x="1140" y="522" fill="#9333ea" font-size="8">■ Sentry</text>
 
-  <!-- ══════════════════════════════════════════════
-       ARROWHEAD DEFS
-  ══════════════════════════════════════════════ -->
-  <defs>
-    <marker id="ag" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#4b5563"/>
-    </marker>
-    <marker id="ag2" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#16a34a"/>
-    </marker>
-    <marker id="ab" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#3b82f6"/>
-    </marker>
-    <marker id="ao" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#d97706"/>
-    </marker>
-    <marker id="av" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#7c3aed"/>
-    </marker>
-    <marker id="ai" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#6366f1"/>
-    </marker>
-    <marker id="at" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#0d9488"/>
-    </marker>
-    <marker id="apu" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#8b5cf6"/>
-    </marker>
-    <marker id="ap" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#a855f7"/>
-    </marker>
-    <marker id="af" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b"/>
-    </marker>
-  </defs>
+  <!-- Bottom tagline -->
+  <text x="600" y="560" text-anchor="middle" fill="#1f2937" font-size="9">Tested across 17 industry domains · avg +18.1 quality score improvement · row-based metered billing · EventBridge reconciler every 5 min</text>
 </svg>
