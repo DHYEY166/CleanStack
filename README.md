@@ -360,23 +360,39 @@ cleanstack/
 │   │   │   ├── approve-rules/           # Data PR approval
 │   │   │   ├── run-status/[runId]/      # Polling endpoint
 │   │   │   ├── runs/[runId]/            # iterate + auto-clean
+│   │   │   ├── download/[runId]/        # Presigned download URL
+│   │   │   ├── export-training/[runId]/ # JSONL/Alpaca/Chat export
+│   │   │   ├── chat-builder/            # Pipeline config from plain English
 │   │   │   ├── pipelines/               # CRUD
 │   │   │   ├── templates/               # Template marketplace
+│   │   │   ├── alerts/configure/        # SNS/Slack alert config
 │   │   │   ├── cron/reconcile-runs/     # Stuck run cleanup
 │   │   │   ├── admin/                   # set-plan, ai-spend
 │   │   │   ├── account/                 # GDPR erasure
 │   │   │   └── usage/                   # Quota status
 │   │   ├── dashboard/                   # Pipeline list + stats
 │   │   ├── pipelines/                   # New pipeline, run page, Data PR
-│   │   └── templates/                   # Template marketplace
+│   │   ├── templates/                   # Template marketplace
+│   │   └── pricing/                     # Pricing page
 │   ├── components/
+│   │   ├── DataPR/
+│   │   │   ├── PRHeader.tsx
+│   │   │   └── RuleCard.tsx
 │   │   ├── QualityGauge.tsx
 │   │   ├── ColumnStatsTable.tsx
 │   │   ├── QualityTrendChart.tsx
 │   │   ├── RunStatusPoller.tsx          # Exponential backoff polling
 │   │   ├── IterationBanner.tsx          # Multi-pass UI
 │   │   ├── AutoCleanSummary.tsx         # Committee vote breakdown
-│   │   └── TrainingExport.tsx           # JSONL/Alpaca/Chat export
+│   │   ├── TrainingExport.tsx           # JSONL/Alpaca/Chat export
+│   │   ├── DocumentProfile.tsx          # Document-mode profile view
+│   │   ├── SchemaDiffViewer.tsx         # Schema drift diff UI
+│   │   ├── PipelineChat.tsx             # Chat builder UI
+│   │   ├── UsageMeter.tsx               # Quota usage display
+│   │   ├── DownloadButton.tsx
+│   │   ├── DeletePipelineButton.tsx
+│   │   ├── Nav.tsx
+│   │   └── Logo.tsx
 │   └── lib/
 │       ├── db.ts                        # Aurora Data API client (HTTP)
 │       ├── billing.ts                   # Row-based metered billing
@@ -393,14 +409,6 @@ cleanstack/
 └── public/
     └── arch.svg                         # Architecture diagram
 ```
-
----
-
-## Built For
-
-H0 — Hack the Zero Stack Hackathon (June 2026)  
-Track: B2B SaaS  
-Required integrations: Vercel + Amazon Aurora PostgreSQL
 
 ---
 
