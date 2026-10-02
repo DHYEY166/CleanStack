@@ -17,6 +17,7 @@ import io
 import re
 import hashlib
 import math
+import time
 import boto3
 import psycopg2
 import pandas as pd
@@ -719,6 +720,177 @@ def _normalize_column(df: pd.DataFrame, col, params: dict) -> None:
     df[col] = new_col
 
 
+# ── semantic_deduplicate: MinHash + LSH banding ──────────────────────────────
+#
+# A row is a near-duplicate when the MinHash estimate of the Jaccard similarity of its
+# lowercased whitespace-token set with an earlier KEPT row is >= threshold; the first
+# occurrence is kept. The old implementation compared every row with every kept row
+# (O(n^2) in Python: hours for ~57k rows, so the run outlived the 15-minute Lambda timeout).
+# LSH banding only verifies rows that share at least one band bucket, so the cost is
+# O(n * num_perm) to build signatures plus the (small) number of candidate pairs.
+#
+# Hashing is deterministic: tokens are hashed with blake2b and the permutations are fixed
+# universal hashes, so results no longer depend on PYTHONHASHSEED (built-in hash()).
+
+SEMANTIC_DEDUP_MAX_ROWS = int(os.environ.get("SEMANTIC_DEDUP_MAX_ROWS", "500000"))
+SEMANTIC_DEDUP_MAX_PERM = 512
+# With no Lambda context (local runs, tests), cap the rule at this many seconds.
+SEMANTIC_DEDUP_DEFAULT_BUDGET_S = float(os.environ.get("SEMANTIC_DEDUP_BUDGET_S", "600"))
+# Time left in the invocation that the rule never uses (other rules, writing the output,
+# DB updates): min(EXECUTOR_RESERVE_S, 25% of the invocation's remaining time). The rule is
+# skipped, not half-applied, if it would run into it.
+LAMBDA_RESERVE_S = float(os.environ.get("EXECUTOR_RESERVE_S", "120"))
+_MERSENNE_61 = (1 << 61) - 1
+_MASK_32 = np.uint64(0xFFFFFFFF)
+
+_invocation_deadline: float | None = None  # time.monotonic(); set by handler(), reserve already taken off
+
+
+def set_invocation_deadline(context) -> None:
+    """Record when long-running rules must stop in this invocation (None without a Lambda context)."""
+    global _invocation_deadline
+    try:
+        remaining_s = float(context.get_remaining_time_in_millis()) / 1000.0
+    except Exception:
+        _invocation_deadline = None
+        return
+    reserve = min(LAMBDA_RESERVE_S, 0.25 * remaining_s)
+    _invocation_deadline = time.monotonic() + remaining_s - reserve
+
+
+def _rule_deadline(budget_s: float = SEMANTIC_DEDUP_DEFAULT_BUDGET_S) -> tuple[float, str]:
+    """Monotonic time by which a long-running rule must finish, and where the limit comes from."""
+    now = time.monotonic()
+    if _invocation_deadline is not None:
+        return _invocation_deadline, "the Lambda time limit"
+    return now + budget_s, f"the {budget_s:.0f}s time budget"
+
+
+def _lsh_params(threshold: float, num_perm: int) -> tuple[int, int]:
+    """(bands, rows_per_band) for LSH over num_perm MinHash values.
+
+    A pair with Jaccard s becomes a candidate with probability 1 - (1 - s^r)^b. Pick the
+    largest r (most selective buckets, fewest candidates) whose b = num_perm // r bands
+    still make a pair AT the threshold a candidate with probability >= 99%, so LSH itself
+    misses at most ~1% of pairs right at the threshold and fewer above it (MinHash
+    estimation noise near the threshold is larger than that). Candidates are always
+    verified against the full signature, so a smaller r only costs time, never accuracy.
+    """
+    t = min(max(threshold, 0.01), 0.999)
+    best = (num_perm, 1)
+    for r in range(1, num_perm + 1):
+        b = num_perm // r
+        if b < 1:
+            break
+        if 1 - (1 - t ** r) ** b >= 0.99:
+            best = (b, r)
+    return best
+
+
+def _perm_coeffs(num_perm: int) -> tuple[np.ndarray, np.ndarray]:
+    """Fixed (a, b) coefficients for h(x) = ((a*x + b) mod 2^61-1) mod 2^32, from blake2b."""
+    a = np.empty(num_perm, dtype=np.uint64)
+    b = np.empty(num_perm, dtype=np.uint64)
+    for i in range(num_perm):
+        d = hashlib.blake2b(f"cleanstack-minhash-{i}".encode(), digest_size=8).digest()
+        a[i] = (int.from_bytes(d[:4], "little") | 1)  # odd, < 2^32
+        b[i] = int.from_bytes(d[4:], "little")        # < 2^32
+    return a, b
+
+
+def _minhash_signatures(texts: list, num_perm: int, deadline: float, limit_desc: str) -> np.ndarray:
+    """(n, num_perm) uint32 MinHash signatures of each text's lowercased token set."""
+    n = len(texts)
+    token_ids: dict = {}
+    token_hashes: list = []
+    flat: list = []
+    starts = np.empty(n, dtype=np.int64)
+    for i, text in enumerate(texts):
+        starts[i] = len(flat)
+        for tok in set(text.lower().split()) or {""}:
+            tid = token_ids.get(tok)
+            if tid is None:
+                tid = token_ids[tok] = len(token_hashes)
+                token_hashes.append(int.from_bytes(
+                    hashlib.blake2b(tok.encode("utf-8", "surrogatepass"), digest_size=4).digest(), "little"))
+            flat.append(tid)
+    if time.monotonic() > deadline:
+        raise RuleSkipped(f"semantic_deduplicate skipped: tokenizing {n:,} rows already reached {limit_desc}")
+
+    tok_hash = np.asarray(token_hashes, dtype=np.uint64)
+    flat_ids = np.asarray(flat, dtype=np.int64)
+    a, b = _perm_coeffs(num_perm)
+    mersenne = np.uint64(_MERSENNE_61)
+    sigs = np.empty((n, num_perm), dtype=np.uint32)
+    # Chunk rows so each (num_perm x tokens) uint64 intermediate stays around 16 MB.
+    max_tokens = max(1, (16 << 20) // (8 * num_perm))
+    row = 0
+    while row < n:
+        end_tok_target = starts[row] + max_tokens
+        row_end = int(np.searchsorted(starts, end_tok_target, side="right"))
+        row_end = min(max(row_end, row + 1), n)
+        t0 = starts[row]
+        t1 = starts[row_end] if row_end < n else len(flat_ids)
+        x = tok_hash[flat_ids[t0:t1]]                                   # (k,)
+        # a, b, x < 2^32, so a*x + b < 2^64: exact in uint64, no overflow.
+        hv = ((a[:, None] * x[None, :] + b[:, None]) % mersenne) & _MASK_32  # (num_perm, k)
+        sigs[row:row_end] = np.minimum.reduceat(hv, starts[row:row_end] - t0, axis=1).T
+        row = row_end
+        if time.monotonic() > deadline:
+            raise RuleSkipped(
+                f"semantic_deduplicate skipped: hashing {n:,} rows would exceed {limit_desc}")
+    return sigs
+
+
+def _semantic_dedup_keep(texts: list, threshold: float, num_perm: int) -> list:
+    """Row positions to keep (first occurrence of each near-duplicate group), in order."""
+    n = len(texts)
+    if n > SEMANTIC_DEDUP_MAX_ROWS:
+        raise RuleSkipped(
+            f"semantic_deduplicate skipped: {n:,} rows exceeds the {SEMANTIC_DEDUP_MAX_ROWS:,}-row limit "
+            "for one executor run")
+    if not 0 < threshold <= 1:
+        raise RuleSkipped(f"threshold must be in (0, 1], got {threshold}")
+    if not 1 <= num_perm <= SEMANTIC_DEDUP_MAX_PERM:
+        raise RuleSkipped(f"num_perm must be between 1 and {SEMANTIC_DEDUP_MAX_PERM}, got {num_perm}")
+    if n == 0:
+        return []
+    deadline, limit_desc = _rule_deadline()
+    if time.monotonic() >= deadline:
+        raise RuleSkipped(f"semantic_deduplicate skipped: not enough time left before {limit_desc}")
+
+    sigs = _minhash_signatures(texts, num_perm, deadline, limit_desc)
+    bands, r = _lsh_params(threshold, num_perm)
+    min_equal = math.ceil(threshold * num_perm - 1e-9)  # equal slots needed: estimate >= threshold
+
+    # Bucket key for (row, band k): the band's r signature values as bytes.
+    banded = np.ascontiguousarray(sigs[:, :bands * r])
+    width = 4 * r  # bytes per band (uint32 values)
+    buckets = [dict() for _ in range(bands)]
+    keep: list = []
+    for i in range(n):
+        if i & 1023 == 0 and time.monotonic() > deadline:
+            raise RuleSkipped(
+                f"semantic_deduplicate skipped: comparing {n:,} rows would exceed {limit_desc} "
+                f"(stopped after {i:,} rows; too many similar candidate rows)")
+        row_bytes = banded[i].tobytes()
+        keys = [row_bytes[k * width:(k + 1) * width] for k in range(bands)]
+        cands: set = set()
+        for k in range(bands):
+            hit = buckets[k].get(keys[k])
+            if hit:
+                cands.update(hit)
+        if cands:
+            idx = np.fromiter(cands, dtype=np.int64, count=len(cands))
+            equal = np.count_nonzero(sigs[idx] == sigs[i], axis=1)
+            if (equal >= min_equal).any():
+                continue  # near-duplicate of an earlier kept row
+        keep.append(i)
+        for k in range(bands):
+            buckets[k].setdefault(keys[k], []).append(i)
+    return keep
+
+
 def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame:
     """Apply one rule. Returns the new frame; raises RuleSkipped when it cannot be applied."""
     if rtype == "drop_nulls":
@@ -752,19 +924,7 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
             raise RuleSkipped("no text column to compare")
         threshold = float(params.get("threshold", 0.8))
         num_perm = int(params.get("num_perm", 64))
-
-        def _minhash_sig(text: str, n: int) -> list:
-            tokens = set(text.lower().split()) or {""}
-            return [min((hash((seed, t)) & 0x7FFFFFFF) for t in tokens) for seed in range(n)]
-
-        texts = df[target_col].astype(str).tolist()
-        sigs = [_minhash_sig(t, num_perm) for t in texts]
-        keep, kept_sigs = [], []
-        for i, sig in enumerate(sigs):
-            is_dup = any(sum(a == b for a, b in zip(sig, ks)) / num_perm >= threshold for ks in kept_sigs)
-            if not is_dup:
-                keep.append(i)
-                kept_sigs.append(sig)
+        keep = _semantic_dedup_keep(df[target_col].astype(str).tolist(), threshold, num_perm)
         return df.iloc[keep].reset_index(drop=True)
 
     if rtype == "type_cast":
@@ -1464,6 +1624,7 @@ def handler(event, context):
     If any record needs a retry the invocation raises, so SQS redelivers the batch; records that
     already finished are skipped on redelivery by the conditional claim.
     """
+    set_invocation_deadline(context)
     retry_errors = []
     results = []
     for record in event.get("Records", []):

@@ -187,7 +187,7 @@ The Bedrock model id and the token prices used for metering are in `src/lib/ai-c
 |---|---|
 | profiler | `DATABASE_URL`, `APP_URL`, `WEBHOOK_SECRET`, `SENTRY_DSN` (optional), `AWS_REGION` |
 | ai-trigger | `APP_URL`, `WEBHOOK_SECRET` |
-| executor | `DB_SECRET_ARN`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SNS_DRIFT_TOPIC_ARN` (optional), `EXECUTOR_MAX_ATTEMPTS` (optional, default 3), `SENTRY_DSN` (optional), `AWS_REGION` |
+| executor | `DB_SECRET_ARN`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SNS_DRIFT_TOPIC_ARN` (optional), `EXECUTOR_MAX_ATTEMPTS` (optional, default 3), `SEMANTIC_DEDUP_MAX_ROWS` (optional, default 500000), `EXECUTOR_RESERVE_S` (optional, default 120: seconds of the invocation `semantic_deduplicate` leaves for writing the output, at most 25% of it), `SENTRY_DSN` (optional), `AWS_REGION` |
 | drift | `DB_SECRET_ARN`, `AWS_REGION` |
 
 Python dependencies are pinned in `lambdas/*/requirements.txt`. At runtime pandas/numpy come from the AWS SDK for pandas (`AWSSDKPandas-Python312`) layer. The code is tested on pandas 2.2.3 and 3.0.6 because the deployed layer version is not recorded here.
@@ -265,7 +265,7 @@ Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 - **Downloads are served as stored.** Deliverables produced before the sidecar split may still contain `__orig_*` columns. **Export As** and the training export strip them; the native download does not. Re-run those pipelines to regenerate them.
 - **Excel blanks are not counted as nulls** by the profiler (cells are read as empty strings). Before/after scores are still computed the same way.
 - **AI spend cap coverage.** The cap is checked before `suggest-transforms` only. Committee calls are metered but not blocked, and chat-builder calls are neither metered nor blocked.
-- **No upload size limit**, and `semantic_deduplicate` is O(n²). Large files can exhaust the executor Lambda.
+- **No upload size limit.** Large files can still exhaust the executor Lambda's memory or time. `semantic_deduplicate` (MinHash + LSH, a few seconds for 50k short texts) is skipped with a reason instead of running past the Lambda deadline, and above `SEMANTIC_DEDUP_MAX_ROWS` rows; other rules have no such guard.
 - **Schema drift alerts** store their diff inside `column_definitions`, so the next alert reports a phantom `_diff` column.
 - **Templates** copy approved rules from all recent runs of a pipeline, not only the latest run.
 - **`middleware.ts`** uses the file convention that Next.js 16 deprecated in favour of `proxy.ts`. It still works; the rename is pending a test against real Clerk keys.
@@ -285,7 +285,7 @@ The model can only suggest rules the executor implements (a contract test compar
 |---|---|
 | `trim_whitespace` | Strip leading/trailing whitespace in text columns |
 | `deduplicate` | Drop exact duplicate rows (row-loss guard 20%) |
-| `semantic_deduplicate` | Drop near-duplicate rows (MinHash) |
+| `semantic_deduplicate` | Drop near-duplicate rows: MinHash Jaccard estimate ≥ `threshold` (default 0.8) over lowercased word sets, keeping the first; LSH banding, deterministic hashing |
 | `fill_nulls` | Fill nulls (mean / median / mode / constant); original kept in the audit file |
 | `drop_nulls` | With a column: drop rows where that column is null. Without: drop rows with at least `ceil(threshold × columns)` nulls |
 | `type_cast` | Cast to float / int / datetime / str. Not applied if values would be lost (e.g. `2.5` → int) |

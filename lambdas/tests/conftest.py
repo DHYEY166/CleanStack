@@ -41,3 +41,7 @@ def drift():
 def rule(rule_type, column=None, rule_id=None, **params):
     """Build a transform_rules row the way the executor reads it from Postgres."""
     return {"id": rule_id, "rule_type": rule_type, "column_name": column, "parameters": params}
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "perf: performance bound with a generous limit (run in CI)")
