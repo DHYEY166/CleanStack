@@ -27,6 +27,33 @@ DOCUMENT_EXTENSIONS = {"pdf", "docx"}
 # Audit columns holding pre-clean values. They live only in audit.csv, never in the deliverable.
 SIDECAR_PREFIX = "__orig_"
 
+# === BEGIN SHARED QUALITY BLOCK ===
+# This block is kept identical in lambdas/profiler/handler.py and lambdas/executor/handler.py so raw and
+# processed quality scores use the same loader and formula (review M1). Each Lambda is
+# deployed as a standalone zip, so it is copied rather than imported.
+# lambdas/tests/test_quality.py fails if the two copies diverge.
+
+SENTINEL_VALUES = {
+    # Explicit null markers
+    "", "n/a", "na", "null", "none", "unknown", "undefined", "not available",
+    "not applicable", "not provided", "not specified", "not given",
+    # Punctuation sentinels
+    "-", "--", "---", "----", ".", "..", "...",
+    "?", "??", "???", "#", "##",
+    # Coded sentinels — unambiguous null-proxy numbers only
+    "00", "000", "99", "999", "9999", "99999", "-99", "-999",
+    # Boolean-as-sentinel (nil/nan/missing/void are unambiguous; "false" and "0" are valid data)
+    "nil", "nan", "missing", "void",
+    # State sentinels (excludes "pending" — valid status value in workflow/ticket/order datasets)
+    "n.a.", "n.a", "#n/a", "#null!", "tbd", "tbc", "not set",
+    "to be determined", "to be confirmed", "unknown value",
+    # Excel/CSV export artifacts — always invalid in real data
+    "#value!", "#ref!", "#div/0!", "#name?", "#num!", "#error!",
+    "error", "err", "null value", "blank", "empty",
+    # Numeric as string — inf/-inf are unambiguous; 0/0.0/-1 removed (valid in real data)
+    "inf", "-inf",
+}
+
 def _is_text(series: pd.Series) -> bool:
     """True for string-like columns under both pandas 2 (object) and pandas 3 (str dtype)."""
     return series.dtype == object or isinstance(series.dtype, pd.StringDtype)
@@ -35,6 +62,231 @@ def _is_text(series: pd.Series) -> bool:
 def _text_cols(df: pd.DataFrame) -> list:
     """All string-like columns (pandas 2 object and pandas 3 str dtypes)."""
     return [c for c in df.columns if _is_text(df[c])]
+
+
+def _dtype_name(series: pd.Series) -> str:
+    """Stable dtype label across pandas versions (pandas 3 reports text columns as "str")."""
+    return "object" if _is_text(series) else str(series.dtype)
+
+
+def detect_encoding(file_bytes: bytes) -> str:
+    try:
+        import chardet
+        result = chardet.detect(file_bytes[:8192])
+        enc = result.get("encoding") or "utf-8"
+        confidence = result.get("confidence", 0.0)
+        return enc if confidence > 0.7 else "utf-8"
+    except ImportError:
+        return "utf-8"
+
+
+def _val_pattern(val: str) -> str:
+    s = re.sub(r'[A-Za-z]+', 'A', val)
+    s = re.sub(r'\d+', 'N', s)
+    return s
+
+
+def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
+    buf = io.BytesIO(file_bytes)
+
+    if fmt == "csv":
+        encoding = detect_encoding(file_bytes)
+        sample = file_bytes[:4096].decode(encoding, errors="replace")
+        sep = "\t" if sample.count("\t") > sample.count(",") else ","
+        return pd.read_csv(
+            io.BytesIO(file_bytes), sep=sep,
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt == "txt":
+        encoding = detect_encoding(file_bytes)
+        sample = file_bytes[:4096].decode(encoding, errors="replace")
+        counts = {s: sample.count(s) for s in [",", "\t", "|", ";"]}
+        sep = max(counts, key=counts.get)
+        if counts[sep] < 2:
+            return pd.read_csv(
+                io.BytesIO(file_bytes), sep=r'\s+',
+                dtype=str, keep_default_na=False, engine='python',
+                encoding=encoding, encoding_errors="replace",
+            )
+        return pd.read_csv(
+            io.BytesIO(file_bytes), sep=sep,
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt == "tsv":
+        encoding = detect_encoding(file_bytes)
+        return pd.read_csv(
+            buf, sep="\t",
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt in ("json", "jsonl"):
+        text = file_bytes.decode("utf-8", errors="replace").strip()
+        if fmt == "jsonl":
+            # Strip comment lines before parsing
+            lines = [l for l in text.splitlines() if not l.strip().startswith("//")]
+            text_clean = "\n".join(lines)
+            try:
+                return pd.read_json(io.BytesIO(text_clean.encode()), lines=True)
+            except Exception:
+                pass
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return pd.json_normalize(parsed)
+            elif isinstance(parsed, dict):
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        return pd.json_normalize(v)
+                return pd.json_normalize([parsed])
+        except Exception:
+            pass
+        try:
+            return pd.read_json(io.BytesIO(file_bytes), lines=True)
+        except Exception:
+            return pd.read_json(io.BytesIO(file_bytes))
+    elif fmt in ("xlsx", "xls"):
+        xl = pd.ExcelFile(buf)
+        df = xl.parse(xl.sheet_names[0], dtype=str, keep_default_na=False)
+        # Forward-fill merged cells (NaN after merge top-left = merged cell artifact)
+        df = df.ffill(axis=0)
+        return df
+    elif fmt == "xml":
+        from lxml import etree
+        root = etree.fromstring(file_bytes)
+        rows = [{child.tag: child.text for child in elem} for elem in root]
+        if not rows:
+            rows = [{root.tag: root.text}]
+        return pd.DataFrame(rows)
+    else:
+        raise ValueError(f"Unsupported format: {fmt}")
+
+
+def compute_quality_score(df: pd.DataFrame) -> dict:
+    total_cells = df.size or 1
+    total_rows  = len(df)
+    total_cols  = len(df.columns)
+
+    null_count = df.isnull().sum().sum()
+    null_pct   = round(null_count / total_cells * 100, 2)
+
+    dup_count = df.duplicated().sum()
+    dup_pct   = round(dup_count / max(total_rows, 1) * 100, 2)
+
+    # keep_default_na=False: empty cells are "" not NaN — exclude them before type-mismatch check
+    type_mismatches = 0
+    for col in df.columns:
+        if _is_text(df[col]):
+            non_empty = df[col][df[col].astype(str).str.strip() != ""]
+            numeric_count = pd.to_numeric(non_empty, errors="coerce").notna().sum()
+            if 0 < numeric_count < len(non_empty):
+                type_mismatches += 1
+
+    # dtype=str: coerce object cols to numeric before outlier detection
+    outlier_count = 0
+    for col in df.columns:
+        _num = pd.to_numeric(df[col], errors="coerce") if _is_text(df[col]) else df[col]
+        if _num.notna().sum() < max(len(_num) * 0.5, 2):
+            continue
+        q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            outlier_count += int(((_num < q1 - 1.5 * iqr) | (_num > q3 + 1.5 * iqr)).sum())
+
+    # Sentinel and whitespace — dataset-level aggregates
+    total_sentinel_count = 0
+    whitespace_padded_cols = 0
+
+    column_stats = {}
+    for col in df.columns:
+        series = df[col]
+        n = len(series)
+
+        col_stat: dict = {
+            "type":         _dtype_name(series),
+            "null_count":   int(series.isnull().sum()),
+            "null_pct":     round(series.isnull().mean() * 100, 2),
+            "unique_count": int(series.nunique()),
+            "sample_values": [
+                str(v) if isinstance(v, (int, float)) and abs(v) > 1e15 else v
+                for v in series.dropna().head(20).tolist()
+            ],
+        }
+
+        # dtype=str: try numeric coercion for min/max/outlier stats
+        _num_series = series if pd.api.types.is_numeric_dtype(series) else pd.to_numeric(series, errors="coerce")
+        if _num_series.notna().sum() >= max(len(_num_series) * 0.5, 2):
+            col_stat["min"] = float(_num_series.min()) if not _num_series.empty else None
+            col_stat["max"] = float(_num_series.max()) if not _num_series.empty else None
+            q1, q3 = _num_series.quantile(0.25), _num_series.quantile(0.75)
+            iqr = q3 - q1
+            if iqr > 0:
+                outliers = _num_series[(_num_series < q1 - 1.5 * iqr) | (_num_series > q3 + 1.5 * iqr)]
+                col_stat["outlier_examples"] = [float(v) for v in outliers.head(3).tolist()]
+
+        if _is_text(series):
+            str_series = series.astype(str).str.strip().str.lower()
+
+            # Sentinel detection
+            sentinel_count = int(str_series.isin(SENTINEL_VALUES).sum())
+            col_stat["sentinel_count"] = sentinel_count
+            col_stat["sentinel_pct"]   = round(sentinel_count / max(n, 1) * 100, 2)
+            col_stat["true_null_pct"]  = round((col_stat["null_count"] + sentinel_count) / max(n, 1) * 100, 2)
+            total_sentinel_count += sentinel_count
+
+            # Sentinel examples (distinct values found)
+            sentinel_vals_found = series.astype(str).str.strip()[
+                series.astype(str).str.strip().str.lower().isin(SENTINEL_VALUES)
+            ].unique().tolist()
+            col_stat["sentinel_examples"] = [str(v) for v in sentinel_vals_found[:5]]
+
+            # Whitespace-padded count
+            raw_str = series.dropna().astype(str)
+            padded = int((raw_str != raw_str.str.strip()).sum())
+            col_stat["whitespace_padded_count"] = padded
+            if padded > 0:
+                whitespace_padded_cols += 1
+
+            # String pattern diversity
+            patterns = raw_str.apply(_val_pattern).value_counts().head(6)
+            col_stat["string_patterns"]       = {str(k): int(v) for k, v in patterns.items()}
+            col_stat["distinct_pattern_count"] = int(raw_str.apply(_val_pattern).nunique())
+
+            # Value frequency for low-cardinality columns
+            if series.nunique() <= 50:
+                top10 = series.value_counts(dropna=False).head(10)
+                col_stat["value_counts"] = {str(k): int(v) for k, v in top10.items()}
+
+        column_stats[str(col)] = col_stat
+
+    # Dataset-level sentinel pct
+    total_object_cells = int(len(df) * len(_text_cols(df))) or 1
+    sentinel_pct_overall = round(total_sentinel_count / total_object_cells * 100, 2)
+
+    # Penalties
+    null_penalty     = min(null_pct * 0.5, 30)
+    dup_penalty      = min(dup_pct * 0.3, 20)
+    type_penalty     = min(type_mismatches * 5, 20)
+    outlier_penalty  = min(outlier_count / max(total_rows, 1) * 100 * 0.1, 10)
+    sentinel_penalty = min(sentinel_pct_overall * 0.4, 15)
+    ws_penalty       = min(whitespace_padded_cols / max(total_cols, 1) * 100 * 0.1, 5)
+    score = max(0, round(100 - null_penalty - dup_penalty - type_penalty
+                         - outlier_penalty - sentinel_penalty - ws_penalty))
+
+    return {
+        "quality_score":          score,
+        "total_rows":             total_rows,
+        "null_percentage":        null_pct,
+        "duplicate_percentage":   dup_pct,
+        "type_mismatch_count":    type_mismatches,
+        "outlier_count":          outlier_count,
+        "sentinel_pct_overall":   sentinel_pct_overall,
+        "whitespace_padded_cols": whitespace_padded_cols,
+        "column_stats":           column_stats,
+    }
+
+# === END SHARED QUALITY BLOCK ===
 
 
 s3 = boto3.client("s3")
@@ -803,65 +1055,21 @@ def audit_key_for(processed_key: str) -> str:
     return processed_key.rsplit("/", 1)[0] + "/audit.csv"
 
 
-def compute_quality_profile(df: pd.DataFrame) -> dict:
-    total_cells = df.size or 1
-    total_rows = len(df)
+def profile_output(file_bytes: bytes, fmt: str, fallback_df: pd.DataFrame) -> dict:
+    """Score the written deliverable exactly as the profiler scores raw uploads (review M1).
 
-    null_count = df.isnull().sum().sum()
-    null_pct = round(null_count / total_cells * 100, 2)
-
-    dup_count = df.duplicated().sum()
-    dup_pct = round(dup_count / max(total_rows, 1) * 100, 2)
-
-    type_mismatches = 0
-    for col in df.columns:
-        if df[col].dtype == object:
-            numeric_count = pd.to_numeric(df[col], errors="coerce").notna().sum()
-            if 0 < numeric_count < len(df[col]):
-                type_mismatches += 1
-
-    outlier_count = 0
-    for col in df.select_dtypes(include=[np.number]).columns:
-        q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
-        iqr = q3 - q1
-        outlier_count += int(
-            df[(df[col] < q1 - 1.5 * iqr) | (df[col] > q3 + 1.5 * iqr)][col].count()
-        )
-
-    null_penalty = min(null_pct * 0.5, 30)
-    dup_penalty = min(dup_pct * 0.3, 20)
-    type_penalty = min(type_mismatches * 5, 20)
-    outlier_penalty = min(outlier_count / max(total_rows, 1) * 100 * 0.1, 10)
-    score = max(0, round(100 - null_penalty - dup_penalty - type_penalty - outlier_penalty))
-
-    column_stats = {}
-    for col in df.columns:
-        series = df[col]
-        stat = {
-            "type": str(series.dtype),
-            "null_count": int(series.isnull().sum()),
-            "null_pct": round(series.isnull().mean() * 100, 2),
-            "unique_count": int(series.nunique()),
-            "sample_values": [str(v) for v in series.dropna().head(5).tolist()],
-        }
-        if pd.api.types.is_numeric_dtype(series):
-            stat["min"] = float(series.min()) if not series.empty else None
-            stat["max"] = float(series.max()) if not series.empty else None
-        column_stats[str(col)] = stat
-
-    return {
-        "quality_score": score,
-        "total_rows": total_rows,
-        "null_percentage": null_pct,
-        "duplicate_percentage": dup_pct,
-        "type_mismatch_count": type_mismatches,
-        "outlier_count": outlier_count,
-        "column_stats": column_stats,
-    }
+    Re-reads the bytes with the shared loader so raw and processed scores come from the same
+    representation and the same formula; a run with zero applied rules keeps its score.
+    """
+    try:
+        return compute_quality_score(load_dataframe(file_bytes, fmt))
+    except Exception as e:
+        print(f"[executor] could not re-load {fmt} output for scoring ({e}); scoring the frame directly")
+        return compute_quality_score(fallback_df)
 
 
 def schema_hash(df: pd.DataFrame) -> tuple[str, dict]:
-    col_defs = {str(col): str(df[col].dtype) for col in df.columns}
+    col_defs = {str(col): _dtype_name(df[col]) for col in df.columns}
     h = hashlib.sha256(json.dumps(col_defs, sort_keys=True).encode()).hexdigest()
     return h, col_defs
 
@@ -1079,7 +1287,7 @@ def handler(event, context):
                 s3.put_object(Bucket=processed_bucket, Key=audit_key_for(processed_key),
                               Body=audit_bytes, ContentType="text/csv")
             df = deliverable
-            profile = compute_quality_profile(df)
+            profile = profile_output(out_bytes, ext, deliverable)
 
         cur.execute(
             """INSERT INTO data_profiles
