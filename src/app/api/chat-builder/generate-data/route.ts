@@ -4,6 +4,9 @@ import { generateText } from "ai";
 import { languageModel } from "@/lib/ai-model";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
+import { forbidGuest } from "@/lib/guest-guard";
+import { checkAiBudget, meterBedrockCall } from "@/lib/bedrock-meter";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 
 const log = logger.child({ route: "POST /api/chat-builder/generate-data" });
 
@@ -59,8 +62,14 @@ export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
+
   const rateLimitRes = await checkRateLimit(aiLimiter, userId);
   if (rateLimitRes) return rateLimitRes;
+
+  const budget = await checkAiBudget(userId);
+  if (!budget.ok) return NextResponse.json({ error: budget.error }, { status: budget.status });
 
   const body: GenerateRequest = await req.json();
   const { description: rawDescription, config, format = "csv", row_count = 20 } = body;
@@ -114,11 +123,12 @@ Requirements:
 
   let rows: Record<string, unknown>[];
   try {
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model: languageModel(),
       prompt,
       maxOutputTokens: 4000,
     });
+    await meterBedrockCall({ teamId: userId, runId: null, callType: "generate_data", model: BEDROCK_MODEL_ID, usage });
 
     // Strip any accidental markdown fences
     const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();

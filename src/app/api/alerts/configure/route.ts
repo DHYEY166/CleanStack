@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { forbidGuest } from "@/lib/guest-guard";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
 
   const { pipeline_id, slack_webhook_url } = await req.json();
   if (!pipeline_id) {
@@ -50,6 +53,8 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
 
   const { searchParams } = new URL(req.url);
   const pipeline_id = searchParams.get("pipeline_id");

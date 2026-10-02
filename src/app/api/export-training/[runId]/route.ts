@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { forbidGuest } from "@/lib/guest-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { queryOneWithTeam } from "@/lib/db";
@@ -41,6 +42,8 @@ export async function GET(
 ) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
 
   const rateLimitRes = await checkRateLimit(aiLimiter, userId);
   if (rateLimitRes) return rateLimitRes;

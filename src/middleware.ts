@@ -2,6 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
 import { isTestMode } from "@/lib/test-mode";
 import { GUEST_COOKIE, guestFromCookie } from "@/lib/guest";
+import { GUEST_BLOCKED_MESSAGE, isGuestBlockedPath } from "@/lib/guest-limits";
 
 const isProtectedRoute = createRouteMatcher([
   "/dashboard(.*)",
@@ -27,13 +28,25 @@ async function hasGuestSession(req: NextRequest): Promise<boolean> {
   return (await guestFromCookie(req.cookies.get(GUEST_COOKIE)?.value)) !== null;
 }
 
+/** A guest on a feature guests cannot use: 403 JSON for the API, back to the dashboard for pages. */
+function guestBlocked(req: NextRequest): NextResponse {
+  if (req.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: GUEST_BLOCKED_MESSAGE, guest: true }, { status: 403 });
+  }
+  return NextResponse.redirect(new URL("/dashboard?guest_blocked=1", req.url));
+}
+
 const clerkHandler = clerkMiddleware(async (auth, req) => {
-  if (isProtectedRoute(req)) {
-    // Clerk users first; otherwise a guest may pass, otherwise Clerk's normal redirect / 401.
+  if (isProtectedRoute(req) || isGuestBlockedPath(req.nextUrl.pathname)) {
+    // Clerk users first; otherwise a guest may pass (except blocked features),
+    // otherwise Clerk's normal redirect / 401.
     const { userId } = await auth();
     if (userId) return;
-    if (await hasGuestSession(req)) return;
-    await auth.protect();
+    if (await hasGuestSession(req)) {
+      if (isGuestBlockedPath(req.nextUrl.pathname)) return guestBlocked(req);
+      return;
+    }
+    if (isProtectedRoute(req)) await auth.protect();
     return;
   }
 
@@ -57,7 +70,10 @@ const TEST_USER_ID = /^user_test_[A-Za-z0-9_-]{1,64}$/;
 
 async function testModeMiddleware(req: NextRequest) {
   const userId = req.cookies.get(TEST_USER_COOKIE)?.value;
-  const signedIn = (userId !== undefined && TEST_USER_ID.test(userId)) || (await hasGuestSession(req));
+  const testUser = userId !== undefined && TEST_USER_ID.test(userId);
+  const guest = !testUser && (await hasGuestSession(req));
+  const signedIn = testUser || guest;
+  if (guest && isGuestBlockedPath(req.nextUrl.pathname)) return guestBlocked(req);
   if (isProtectedRoute(req) && !signedIn) {
     if (req.nextUrl.pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

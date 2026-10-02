@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { forbidGuest } from "@/lib/guest-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, CopyObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";
@@ -17,6 +18,8 @@ export async function POST(
 ) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
 
   const { runId } = await params;
 

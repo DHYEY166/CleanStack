@@ -39,4 +39,27 @@ describe("middleware: guests", () => {
     delete process.env.GUEST_COOKIE_SECRET;
     expect((await run("/api/pipelines", valid)).status).toBe(401);
   });
+
+  it("guests are blocked from chat, auto-clean, training export, alerts, account, templates and admin", async () => {
+    const cookie = `${GUEST_COOKIE}=${await guestToken()}`;
+    for (const path of ["/api/chat-builder", "/api/chat-builder/generate-data", "/api/runs/r1/auto-clean", "/api/export-training/r1",
+      "/api/alerts/configure", "/api/account", "/api/templates", "/api/templates/t1/use", "/api/admin/ai-spend"]) {
+      const res = await run(path, cookie);
+      expect(res.status, path).toBe(403);
+      expect((await res.json()).guest, path).toBe(true);
+    }
+    const page = await run("/templates", cookie);
+    expect(page.headers.get("location")).toBe("http://localhost:3000/dashboard?guest_blocked=1");
+    // Not blocked: the normal flow, including later passes.
+    for (const path of ["/api/runs/r1/iterate", "/api/run-status/r1", "/api/download/r1"]) {
+      expect((await run(path, cookie)).headers.get("x-middleware-next"), path).toBe("1");
+    }
+  });
+
+  it("a signed-in user with a stale guest cookie is not blocked", async () => {
+    const cookie = `${GUEST_COOKIE}=${await guestToken()}; cs_test_user=user_test_alice`;
+    for (const path of ["/api/chat-builder", "/templates", "/api/account"]) {
+      expect((await run(path, cookie)).headers.get("x-middleware-next"), path).toBe("1");
+    }
+  });
 });
