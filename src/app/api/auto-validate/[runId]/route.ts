@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { generateText, type LanguageModelUsage } from "ai";
 
-import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { languageModel } from "@/lib/ai-model";
 import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
@@ -79,7 +79,7 @@ async function runConsultant(
 ): Promise<{ votes: VoteResult[]; usage: LanguageModelUsage }> {
   try {
     const result = await generateText({
-      model: bedrock(BEDROCK_MODEL_ID),
+      model: languageModel(),
       system: systemPrompt,
       prompt: userPrompt,
       maxOutputTokens: 1500,

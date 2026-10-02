@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { generateText } from "ai";
-import { bedrock } from "@ai-sdk/amazon-bedrock";
-import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
+import { languageModel } from "@/lib/ai-model";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
@@ -116,7 +115,7 @@ Requirements:
   let rows: Record<string, unknown>[];
   try {
     const { text } = await generateText({
-      model: bedrock(BEDROCK_MODEL_ID),
+      model: languageModel(),
       prompt,
       maxOutputTokens: 4000,
     });
