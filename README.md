@@ -1,417 +1,282 @@
 # CleanStack
 
-[![Demo Video](public/demo-thumb.png)](https://youtu.be/rhsA_740Zgs)
+CleanStack is a web app for cleaning tabular files and documents with an AI-reviewed, human-approved workflow. You upload a file and a Lambda profiles it. Claude (via Amazon Bedrock) then proposes transform rules with reasons, and you approve or reject each one in a "Data PR". Another Lambda applies the approved rules with pandas and returns a cleaned file with a before/after quality score.
 
-**AI-powered data pipeline automation for B2B teams.**
+[![Demo video](public/demo-thumb.png)](https://youtu.be/rhsA_740Zgs) · Live deployment: [clean-stack-eta.vercel.app](https://clean-stack-eta.vercel.app)
 
-CleanStack turns raw, messy data into clean, analytics-ready datasets through a multi-pass AI pipeline with a human-in-the-loop approval workflow — the "Data PR." Upload a CSV, Excel, JSON, PDF, DOCX, XML, or Parquet file. CleanStack profiles it, proposes a precise set of transform rules, routes them through a 3-agent AI committee, executes them on AWS Lambda, and delivers a quality-scored output. All in under two minutes.
-
-**Live:** [clean-stack-eta.vercel.app](https://clean-stack-eta.vercel.app)
-
----
-
-## The Problem
-
-Data teams spend 60–80% of their time cleaning data before analysis. Existing tools (Fivetran, Airbyte, Talend) cost $500+/month, require weeks of setup, and still need engineers to write transform logic. Smaller teams are left scripting pandas in Jupyter notebooks with no audit trail, no version control, and no quality measurement.
-
-CleanStack solves this with an AI-driven pipeline that costs ~$5/month to run at SME scale.
-
----
-
-## Key Features
-
-### Data PR Workflow
-Every cleaning operation goes through a GitHub-style pull request before it executes. AI suggests rules with reasoning citing actual data evidence; a human approves or rejects each one. Full audit trail stored in Aurora PostgreSQL.
-
-### Multi-Pass Auto-Clean
-After pass 1, click **⚡ Auto-Clean Remaining** to trigger up to 2 additional AI passes automatically. Each pass re-profiles the output, generates conservative rules (no row-dropping), routes them through the AI committee, and executes — stopping when quality gains are diminishing returns.
-
-### AI Committee (3-Agent Review)
-Three specialized Claude agents review each rule in parallel in auto-clean mode:
-- **SafetyAuditor** — checks for data loss risk
-- **Statistician** — validates statistical soundness  
-- **DomainValidator** — evaluates domain appropriateness
-
-Risk thresholds: LOW rules (trim, fill) need 1/3 votes, MEDIUM (type_cast, deduplicate) need 2/3, HIGH rules (drop_nulls, filter) need unanimous approval.
-
-### Multi-Format Support
-CSV, TSV, Excel (xlsx/xls), JSON, JSONL, XML, Parquet, PDF, DOCX. Tabular files get column-level profiling; documents get PII detection, NER redaction, header/footer removal, and encoding repair.
-
-### Data Quality Score
-Every run shows a 0–100 quality score before and after, with breakdown of null %, duplicate %, type mismatches, outliers, and sentinel values. Score improvements tracked across passes.
-
-### AI Training Export
-Export cleaned datasets as Raw JSONL, Alpaca, or Chat (OpenAI) format for LLM fine-tuning, with configurable train/val/test splits.
-
-### Schema Drift Alerts
-After each execution, CleanStack hashes the output schema and compares to the previous run. If structure changes, an SNS alert fires to email and Slack.
-
-### Chat Builder
-Describe your data problem in plain English. CleanStack's AI suggests a pipeline configuration and previews the rules before you upload anything.
-
-### Template Marketplace
-Save and reuse cleaning configurations as templates. Templates skip the AI step entirely — instant execution.
+- [Architecture](#architecture)
+- [Run it locally](#run-it-locally)
+- [Run the tests](#run-the-tests)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+- [Operations runbook](#operations-runbook)
+- [Security model](#security-model)
+- [Known limitations](#known-limitations)
+- [Transform rules](#transform-rules)
 
 ---
 
 ## Architecture
 
 ```
-User Upload (Browser)
-         │
-         │  POST /api/upload → presigned S3 URL
-         ▼
-S3 Raw Bucket (SSE-KMS encrypted, versioning enabled)
-         │
-         │  S3 PUT event
-         ▼
-AWS Lambda — Profiler (Python 3.12)
-  • Parses 9 file formats (CSV, Excel, JSON, XML, Parquet, PDF, DOCX...) with magic byte detection, chardet encoding, BOM strip
-  • Column-level stats: null %, duplicates, type mismatches, outliers, 50+ sentinel values
-  • Quality score 0–100
-  • Signal detection: 7 categories (ffill candidates, outliers, boolean cols, multi-currency, split candidates, messy headers, numeric locale) stored in column_stats JSONB
-  • Writes data_profiles to Aurora PostgreSQL
-  • POSTs to /api/webhooks/profile-complete
-         │
-         │  Webhook → SQS enqueue (async, profiler returns immediately)
-         ▼
-AWS SQS — cleanstack-ai-jobs queue
-         │
-         │  SQS trigger (within seconds)
-         ▼
-AWS Lambda — AI Trigger (Python 3.12)
-  • Dequeues run_id
-  • HTTP POSTs to /api/suggest-transforms
-         │
-         ▼
-Next.js API — /api/suggest-transforms
-  • Claude Sonnet 4.6 via AWS Bedrock (structured output, Zod schema)
-  • Generates 6–20 transform rules with AI reasoning
-  • Pass 2+: conservative prompt (normalize/type_cast only, no row drops)
-  • If auto-clean: calls /api/auto-validate for AI committee review
-         │
-         │  (manual mode) → status: awaiting_approval → user reviews Data PR
-         │  (auto mode)  → /api/auto-validate → AI committee → SQS
-         ▼
-AWS SQS — cleanstack-jobs queue
-         │
-         │  SQS trigger
-         ▼
-AWS Lambda — Executor (Python 3.12)
-  • Reads approved rules from Aurora
-  • Applies transforms via pandas (25 rule types)
-  • Row count safety guard: >10% loss in auto_mode → abort
-  • Writes processed file to S3 Processed Bucket
-  • Re-profiles output, updates Aurora with new quality score
-  • Deletes raw file (auto_delete_raw=true, privacy by design)
-  • If quality improvement ≥5% AND pass <3 → auto-creates next pass
-         │
-         │  (on schema drift)
-         ▼
-AWS Lambda — Drift Checker
-  • Computes schema diff
-  • Posts to Slack webhook
-  • Stores snapshot in Aurora
-
-Supporting infrastructure:
-  • AWS EventBridge → fires reconciler cron every 5 min (marks stuck runs as failed)
-  • Upstash Redis → caches billing quota (60s TTL, reduces DB calls)
-  • Sentry → error monitoring on Next.js + Lambdas
-  • AWS GuardDuty → threat detection
-  • AWS CloudTrail → API audit trail
+Browser ── Next.js 16 app on Vercel (Clerk auth, API routes) ── Aurora PostgreSQL (RDS Data API)
+   │                │
+   │ presigned PUT  │ presigned GET (120 s) for downloads
+   ▼                ▼
+S3 raw bucket    S3 processed bucket  (output.<ext> + audit.csv per run)
+   │ S3 event
+   ▼
+Lambda: profiler ── stats + quality score → data_profiles ── POST /api/webhooks/profile-complete
+                                                                 │
+               AI_QUEUE_ENABLED=true: SQS ai-jobs → Lambda ai-trigger ┐
+               otherwise: inline call ───────────────────────────────┤
+                                                                     ▼
+                                       /api/suggest-transforms (Bedrock) → transform_rules
+                                                                     │
+                     manual: Data PR review → /api/approve-rules     │ auto: /api/auto-validate
+                                                                     ▼   (3-persona committee)
+                                                         SQS executor queue
+                                                                     │
+Lambda: executor ── claims run, applies rules, writes deliverable + audit file,
+                    re-scores output, deletes raw run objects, optional next pass
+                    └─ schema changed → SNS → Lambda: drift → Slack webhook
 ```
 
-**Frontend:** Next.js 16 App Router on Vercel  
-**Database:** Amazon Aurora PostgreSQL Serverless v2 via Data API (HTTP, no connection pooling issues)  
-**AI:** Claude Sonnet 4.6 via Amazon Bedrock (`us.anthropic.claude-sonnet-4-6`)  
-**Auth:** Clerk (with Row-Level Security in Aurora scoped to team_id)  
-**Storage:** S3 (SSE-KMS encrypted, versioned, access-logged)  
-**Compute:** AWS Lambda Python 3.12 + AWSSDKPandas layer  
+| Component | Where it lives | Notes |
+|---|---|---|
+| Web app + API | `src/` (Next.js App Router) | Deployed on Vercel |
+| Profiler Lambda | `lambdas/profiler/handler.py` | S3 PUT trigger |
+| AI trigger Lambda | `lambdas/ai-trigger/handler.py` | SQS trigger, calls `/api/suggest-transforms` |
+| Executor Lambda | `lambdas/executor/handler.py` | SQS trigger |
+| Drift Lambda | `lambdas/drift/handler.py` | SNS trigger |
+| Schema | `src/lib/schema.sql`, `src/lib/migrations/NNN_*.sql` | Applied by `run-migration.mjs` |
+| AWS resources (buckets, queues, IAM, KMS, Lambda config, cron schedule) | **Not in this repo** | Configured by hand in the AWS console; see [Known limitations](#known-limitations) |
+
+### Run lifecycle
+
+`pending` (presigned URL issued) → `profiling` → `awaiting_ai` → `awaiting_approval` → `queued` → `running` → `completed` / `failed`.
+
+- **Execution is idempotent per run.** The executor moves a run from `queued` to `running` with a conditional `UPDATE`. A duplicate SQS delivery is acknowledged and skipped. A `running` lease older than 15 minutes, which is Lambda's hard limit, can be reclaimed.
+- **Rules are all-or-nothing.** The executor snapshots the frame before each rule. If a rule fails or is unsafe (unknown type, missing column, more than 20% row loss, bad regex, cast that would lose data), the frame is restored and the rule is recorded as *not applied* with a reason in `transform_rules.parameters._execution`. The run page shows those rules as "Not applied".
+- **Deliverables never contain audit columns.** Rules that rewrite values keep the original in an `__orig_<column>` sidecar. Sidecars are written only to `processed/{pipeline}/{run}/audit.csv`, next to `output.<ext>`.
+- **The quality score is computed the same way before and after.** The profiler and executor share one loader and scorer (the `SHARED QUALITY BLOCK`, enforced by a test), and the executor scores the bytes it actually wrote.
 
 ---
 
-## Security
+## Run it locally
 
-| Layer | Implementation |
-|-------|---------------|
-| Authentication | Clerk (every authenticated route) |
-| Tenant isolation | PostgreSQL Row-Level Security on 4 tables + `queryWithTeam()` helper |
-| S3 access | SSE-KMS encryption, versioning, access logging, CORS restricted to production domain |
-| Secret comparison | `crypto.timingSafeEqual` on all webhook/admin secret checks |
-| Rate limiting | Upstash Redis sliding window — 20 uploads/hr, 50 AI calls/hr/team, 30 chat/hr |
-| AI spend cap | Per-team monthly cap ($50 soft, $200 hard), tracked in `bedrock_usage` table |
-| Prompt injection | User data wrapped in `<user_data>` tags with explicit AI instruction |
-| Content Security Policy | Full CSP with frame-src/object-src none |
-| GDPR erasure | `DELETE /api/account?confirm=true` — cascades all DB + S3 deletion |
-| Input validation | File types allowlisted, content_type derived server-side, rule arrays capped at 100 |
-| ReDoS protection | `redact_pattern` regex length-capped at 200 chars with `re.error` catch |
-| Error responses | Generic messages to clients, full errors logged to Sentry only |
-| MFA enforcement | AWS IAM policy requiring MFA for console operations |
-| Threat detection | AWS GuardDuty + CloudTrail enabled |
-| Dependency CVEs | xlsx replaced with `@e965/xlsx` (patched fork) |
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | Next.js 16, Tailwind CSS, Recharts |
-| AI | Claude Sonnet 4.6 (Bedrock), Vercel AI SDK |
-| Backend | Next.js API Routes (serverless) |
-| Database | Amazon Aurora PostgreSQL Serverless v2 (Data API) |
-| Storage | Amazon S3 (SSE-KMS, versioned) |
-| Compute | AWS Lambda Python 3.12 |
-| Queue | Amazon SQS (2 queues: ai-jobs + executor-jobs) |
-| Alerts | Amazon SNS → Email / Slack |
-| Cache | Upstash Redis (quota caching, rate limiting) |
-| Auth | Clerk |
-| Monitoring | Sentry (Next.js + Lambda) |
-| Scheduling | AWS EventBridge (reconciler cron) |
-| Security | AWS GuardDuty, CloudTrail, IAM with scoped policies |
-| Deployment | Vercel |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 20+
-- AWS account with Aurora PostgreSQL Serverless v2, S3, Lambda, SQS, SNS configured
-- Clerk account
-- Amazon Bedrock access (Claude Sonnet 4.6)
-- Upstash account (Redis, free tier)
-- Sentry account (free tier)
-
-### Environment Variables
-
-Create `cleanstack/.env.local`:
-
-```env
-# Clerk
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
-CLERK_SECRET_KEY=
-
-# Aurora Data API
-AURORA_CLUSTER_ARN=arn:aws:rds:REGION:ACCOUNT:cluster:CLUSTER_NAME
-AURORA_SECRET_ARN=arn:aws:secretsmanager:REGION:ACCOUNT:secret:SECRET_NAME
-DATABASE_URL=  # Used by migration scripts only
-
-# AWS
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-S3_RAW_BUCKET=
-S3_PROCESSED_BUCKET=
-SQS_QUEUE_URL=                 # cleanstack-jobs (executor queue)
-AI_JOBS_QUEUE_URL=             # cleanstack-ai-jobs (AI trigger queue)
-SNS_DRIFT_TOPIC_ARN=
-
-# App
-NEXT_PUBLIC_APP_URL=
-WEBHOOK_SECRET=                # Random 32-byte hex string
-ADMIN_SECRET=                  # Random 32-byte hex string
-ADMIN_EMAILS=                  # Comma-separated admin email addresses
-ADMIN_USER_IDS=                # Comma-separated Clerk user IDs for admin bypass
-CRON_SECRET=                   # Random 32-byte hex string
-
-# Feature flags
-AI_QUEUE_ENABLED=true          # Set false to disable SQS async chain
-
-# Monitoring
-SENTRY_DSN=
-NEXT_PUBLIC_SENTRY_DSN=
-
-# Cache
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
-```
-
-### Run Locally
+Prerequisites: Node.js 20 or 22, npm, Python 3.12 (for the Lambda tests), and an AWS account with the resources in [Configuration](#configuration). The UI cannot do anything useful without Aurora, S3, SQS, Bedrock and Clerk. There is no local mock stack.
 
 ```bash
-cd cleanstack
-npm install
-npm run dev
+git clone https://github.com/DHYEY166/CleanStack.git
+cd CleanStack
+npm ci
+cp .env.example .env.local     # fill in real values
+npm run dev                    # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+When the server starts it logs one `invalid or missing environment` line listing any required variable that is missing or malformed (see `src/lib/env.ts`).
 
-### Database Setup
+Database (first time, and after pulling new migrations):
 
 ```bash
-# Run schema (Aurora via Data API or psql)
-node src/lib/migrations/run-migration.mjs
-
-# Seed templates
-psql $DATABASE_URL -f src/lib/seed-templates.sql
+AURORA_HOST=<cluster endpoint> RDS_CA_BUNDLE=/path/to/global-bundle.pem \
+  node src/lib/migrations/run-migration.mjs
 ```
 
-### Lambda Deployment
+This applies `schema.sql` and then every `src/lib/migrations/NNN_*.sql` in order. Every statement is idempotent, so re-running is safe. It authenticates with an RDS IAM token for `AURORA_USER` (default `postgres`). Optional seed data is in `src/lib/seed-templates.sql`.
 
-⚠️ **Important:** Do NOT re-zip from scratch. The profiler and executor use `AWSSDKPandas-Python312` layer which combined with dependencies exceeds the 250MB Lambda limit. Always patch the existing deployed zip:
+## Run the tests
+
+The same commands as CI (`ci/verify.sh` runs all of them):
 
 ```bash
-# Get current deployed zip
-URL=$(aws lambda get-function --function-name cleanstack-profiler \
-  --region us-east-1 --query 'Code.Location' --output text)
-curl -s -o /tmp/existing.zip "$URL"
+npm ci
+npx eslint
+npx tsc --noEmit
+npx vitest run          # TypeScript unit tests (src/**/*.test.ts)
+npm run build
 
-# Patch handler only
-zip /tmp/existing.zip -j lambdas/profiler/handler.py
-
-# Deploy
-aws lambda update-function-code \
-  --function-name cleanstack-profiler \
-  --zip-file fileb:///tmp/existing.zip \
-  --region us-east-1
+python3.12 -m venv .venv && . .venv/bin/activate
+pip install -r lambdas/requirements-dev.txt
+python -m pytest -q lambdas/tests
 ```
 
-**Required Lambda environment variables:**
+The Lambda tests import the real handlers. AWS clients are created but never called, and DB and S3 are faked inside the tests. CI runs them against both pandas 2.2.3 (pinned) and pandas 3.0.6.
 
-| Function | Required env vars |
-|----------|------------------|
-| `cleanstack-profiler` | `DATABASE_URL`, `APP_URL`, `WEBHOOK_SECRET`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SQS_QUEUE_URL`, `SNS_DRIFT_TOPIC_ARN`, `SENTRY_DSN` |
-| `cleanstack-executor` | `DB_SECRET_ARN`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SQS_QUEUE_URL`, `SNS_DRIFT_TOPIC_ARN`, `SENTRY_DSN` |
-| `cleanstack-ai-trigger` | `APP_URL`, `WEBHOOK_SECRET`, `SENTRY_DSN` |
+The workflow definition is `ci/github-actions-ci.yml`. It is **not active yet** because GitHub only runs workflows from `.github/workflows/`. To enable it, move the file there (`git mv ci/github-actions-ci.yml .github/workflows/ci.yml`) with a token that has the `workflow` scope.
 
 ---
 
-## How It Works
+## Configuration
 
-1. **Upload** — Drop a file on New Pipeline. S3 PUT triggers Profiler Lambda.
-2. **Profile** — Column-level stats, quality score 0–100, PII detection (document mode).
-3. **Queue** — Profile-complete webhook enqueues to SQS (async — no blocking).
-4. **AI Suggest** — AI Trigger Lambda calls suggest-transforms. Claude generates 6–20 rules.
-5. **Review (Data PR)** — Approve or reject rules. Full AI reasoning shown per rule.
-6. **Execute** — Approved rules → SQS → Executor Lambda applies transforms via pandas.
-7. **Score** — Before/after quality score. Download clean file or export for AI training.
-8. **Auto-Clean** — Optionally trigger 1–2 more AI-committee-approved passes automatically.
+### Web app (Vercel / `.env.local`)
 
----
+The full contract is in `src/lib/env.ts`, and `.env.example` has a placeholder for every variable. A test fails if one is missing from `.env.example`.
 
-## Supported Transform Rules
+| Variable | Required | Purpose |
+|---|---|---|
+| `AWS_REGION` | no (default `us-east-1`) | Region for S3, SQS, RDS Data API, Bedrock |
+| `AURORA_CLUSTER_ARN` | yes | Aurora cluster ARN (RDS Data API) |
+| `AURORA_SECRET_ARN` | yes | Secrets Manager ARN of the DB credentials |
+| `S3_RAW_BUCKET` | yes | Raw uploads |
+| `S3_PROCESSED_BUCKET` | yes | Deliverables and audit files |
+| `SQS_QUEUE_URL` | yes | Executor queue. If unset, approved runs are marked completed **without executing** |
+| `AI_QUEUE_ENABLED` | no | `true` = enqueue AI jobs to `AI_JOBS_QUEUE_URL`; otherwise `profile-complete` calls `suggest-transforms` inline |
+| `AI_JOBS_QUEUE_URL` | when `AI_QUEUE_ENABLED=true` | AI jobs queue |
+| `NEXT_PUBLIC_APP_URL` | yes | Base URL for internal webhook calls |
+| `WEBHOOK_SECRET` | yes | Shared with the profiler and ai-trigger Lambdas (`x-webhook-secret`) |
+| `CRON_SECRET` | yes | `Authorization: Bearer` for `/api/cron/reconcile-runs` |
+| `ADMIN_SECRET` | no | `x-admin-secret` for `/api/admin/*`; those routes return 401 when unset |
+| `ADMIN_EMAILS`, `ADMIN_USER_IDS` | no | Users who bypass billing quotas |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | yes | Clerk |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | no | Rate limiting and quota cache. **Both are off when unset (fail open)** |
+| `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN` | no | Error reporting |
+| `LOG_LEVEL` | no (default `info`) | Threshold of the JSON logger |
 
-Rules are gate-controlled: AI only suggests a rule if signal detection in the profiler confirms the relevant pattern is present in the data.
+Generate shared secrets with `openssl rand -hex 32`. Values shorter than 32 characters produce a startup warning.
 
-### Tabular Rules
+The Bedrock model id and the token prices used for metering are in `src/lib/ai-config.ts`. Today that is `us.anthropic.claude-sonnet-4-6` at $3 / $15 per 1M input/output tokens. Update both in the same commit when changing models.
 
-| Rule | Risk | Description |
-|------|------|-------------|
-| `trim_whitespace` | SAFE | Strip leading/trailing whitespace from string columns |
-| `deduplicate` | LOSS | Remove exact duplicate rows |
-| `semantic_deduplicate` | LOSS | Remove near-duplicate rows using MinHash similarity |
-| `fill_nulls` | SYNTHETIC | Fill missing values (mean / median / mode / constant) |
-| `drop_nulls` | LOSS | Drop rows exceeding null threshold |
-| `type_cast` | MUTATION | Convert column to float / int / datetime / str |
-| `normalize` | SAFE | Standardize date formats (→ YYYY-MM-DD) and lowercase strings |
-| `filter` | LOSS | Remove rows matching condition (gt / lt / eq / neq / notnull) |
-| `filter_extended` | LOSS | Extended filter: gte / lte / contains / regex / in / startswith / endswith |
-| `rename` | SAFE | Rename column to snake_case |
-| `ner_redact` | MUTATION | Redact named entities (PERSON, ORG, GPE, DATE, IP) |
-| `ffill` | SYNTHETIC | Forward-fill nulls from prior row — signal-gated, sidecar `__orig_*` preserved |
-| `bfill` | SYNTHETIC | Backward-fill nulls from next row — signal-gated, sidecar `__orig_*` preserved |
-| `bool_cast` | SAFE | Normalize true/false/yes/no/1/0 variants to bool/int/str |
-| `outlier_cap` | MUTATION | IQR-based outlier capping — signal-gated, sidecar preserved |
-| `multi_currency_strip` | MUTATION | Strip mixed currency symbols ($€£¥₹₩) and convert to float — >50% parse guard |
-| `split_column` | SAFE | Split column on delimiter into new columns, source preserved |
-| `column_header_normalize` | SAFE | snake_case all column names — signal-gated on messy headers |
-| `parquet_write` | SAFE | Output as Parquet format instead of native input format |
+### Lambdas (set on each function)
 
-### Document Rules
+| Function | Variables read by the code |
+|---|---|
+| profiler | `DATABASE_URL`, `APP_URL`, `WEBHOOK_SECRET`, `SENTRY_DSN` (optional), `AWS_REGION` |
+| ai-trigger | `APP_URL`, `WEBHOOK_SECRET` |
+| executor | `DB_SECRET_ARN`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SNS_DRIFT_TOPIC_ARN` (optional), `EXECUTOR_MAX_ATTEMPTS` (optional, default 3), `SENTRY_DSN` (optional), `AWS_REGION` |
+| drift | `DB_SECRET_ARN`, `AWS_REGION` |
 
-| Rule | Description |
-|------|-------------|
-| `strip_pii` | Remove emails, phones, SSNs, credit card numbers |
-| `fix_encoding` | Repair corrupted unicode characters |
-| `remove_headers_footers` | Strip repeated page headers/footers |
-| `remove_blank_lines` | Remove excessive blank lines |
-| `normalize_whitespace` | Collapse irregular spacing in document text |
-| `strip_html` | Remove HTML tags from text |
-| `redact_pattern` | Redact custom regex pattern (length-capped at 200 chars, validated) |
-
-**Data integrity safeguards:** SYNTHETIC fills require `synthetic_fill: true` in parameters and "⚠ SYNTHETIC" in AI reasoning. MUTATION rules write `__orig_{col}` sidecar columns. LOSS rules are capped at 20% row loss per rule (restores if exceeded).
+Python dependencies are pinned in `lambdas/*/requirements.txt`. At runtime pandas/numpy come from the AWS SDK for pandas (`AWSSDKPandas-Python312`) layer. The code is tested on pandas 2.2.3 and 3.0.6 because the deployed layer version is not recorded here.
 
 ---
 
-## Pricing
+## Deployment
 
-| Plan | Price | Included rows/mo | Overage |
-|------|-------|-----------------|---------|
-| Free | $0 | 50,000 (hard cap) | — |
-| Pro | $49/mo | 1,000,000 | $0.50/100K rows |
-| Team | $199/mo | 10,000,000 | $0.30/100K rows |
-| Enterprise | Custom | Unlimited | Custom |
+**Web app.** Vercel builds `main` (`npm run build`). The build needs no secrets because configuration is validated per request. Set the variables above in the Vercel project.
 
----
+**Migrations.** Run `run-migration.mjs` (see above) **before** deploying code that needs new tables. Migration `002_ai_usage_tables.sql` creates `bedrock_usage` and `ai_spend_limits`. Without them, AI metering and the spend cap do not work.
 
-## Project Structure
+**Lambdas.** Each Lambda is deployed as its handler plus its `requirements.txt`. The profiler and executor also attach the AWSSDKPandas layer. There is no build or deploy script in the repo yet, so build the zip from the pinned requirements (excluding pandas/numpy, which the layer provides) and update the function:
 
-```
-cleanstack/
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── upload/                  # Presigned S3 URL generation
-│   │   │   ├── webhooks/profile-complete/  # Lambda → SQS enqueue
-│   │   │   ├── suggest-transforms/      # AI rule generation
-│   │   │   ├── auto-validate/[runId]/   # AI committee (3 agents)
-│   │   │   ├── approve-rules/           # Data PR approval
-│   │   │   ├── run-status/[runId]/      # Polling endpoint
-│   │   │   ├── runs/[runId]/            # iterate + auto-clean
-│   │   │   ├── download/[runId]/        # Presigned download URL
-│   │   │   ├── export-training/[runId]/ # JSONL/Alpaca/Chat export
-│   │   │   ├── chat-builder/            # Pipeline config from plain English
-│   │   │   ├── pipelines/               # CRUD
-│   │   │   ├── templates/               # Template marketplace
-│   │   │   ├── alerts/configure/        # SNS/Slack alert config
-│   │   │   ├── cron/reconcile-runs/     # Stuck run cleanup
-│   │   │   ├── admin/                   # set-plan, ai-spend
-│   │   │   ├── account/                 # GDPR erasure
-│   │   │   └── usage/                   # Quota status
-│   │   ├── dashboard/                   # Pipeline list + stats
-│   │   ├── pipelines/                   # New pipeline, run page, Data PR
-│   │   ├── templates/                   # Template marketplace
-│   │   └── pricing/                     # Pricing page
-│   ├── components/
-│   │   ├── DataPR/
-│   │   │   ├── PRHeader.tsx
-│   │   │   └── RuleCard.tsx
-│   │   ├── QualityGauge.tsx
-│   │   ├── ColumnStatsTable.tsx
-│   │   ├── QualityTrendChart.tsx
-│   │   ├── RunStatusPoller.tsx          # Exponential backoff polling
-│   │   ├── IterationBanner.tsx          # Multi-pass UI
-│   │   ├── AutoCleanSummary.tsx         # Committee vote breakdown
-│   │   ├── TrainingExport.tsx           # JSONL/Alpaca/Chat export
-│   │   ├── DocumentProfile.tsx          # Document-mode profile view
-│   │   ├── SchemaDiffViewer.tsx         # Schema drift diff UI
-│   │   ├── PipelineChat.tsx             # Chat builder UI
-│   │   ├── UsageMeter.tsx               # Quota usage display
-│   │   ├── DownloadButton.tsx
-│   │   ├── DeletePipelineButton.tsx
-│   │   ├── Nav.tsx
-│   │   └── Logo.tsx
-│   └── lib/
-│       ├── db.ts                        # Aurora Data API client (HTTP)
-│       ├── billing.ts                   # Row-based metered billing
-│       ├── bedrock-meter.ts             # AI cost tracking per team
-│       ├── quota-cache.ts               # Upstash Redis quota cache
-│       ├── rate-limit.ts                # Upstash sliding window limits
-│       ├── schema.sql                   # 9 tables + indexes
-│       └── types.ts                     # TypeScript types
-├── lambdas/
-│   ├── profiler/                        # S3 trigger → profile → webhook
-│   ├── executor/                        # SQS trigger → transform → re-profile
-│   ├── ai-trigger/                      # SQS trigger → call suggest-transforms
-│   └── drift/                           # SNS trigger → schema diff → Slack
-└── public/
-    └── arch.svg                         # Architecture diagram
+```bash
+aws lambda update-function-code --function-name cleanstack-executor \
+  --zip-file fileb://executor.zip --region us-east-1
 ```
 
+**AWS settings the code relies on** (configure them in AWS; they cannot be checked from this repo):
+
+- **Executor SQS queue:** visibility timeout ≥ the executor Lambda timeout (AWS recommends 6×), and a dead-letter queue with `maxReceiveCount` ≥ `EXECUTOR_MAX_ATTEMPTS`. The handler does not return partial batch failures, so one failing record retries the whole batch. That is safe because execution is idempotent, but `BatchSize: 1` keeps retries simple.
+- **Processed bucket CORS:** allow `GET` from the app origin. The browser fetches the presigned URL for **Export As**; the plain download is a navigation and needs no CORS.
+- **IAM for the web app role:** `s3:PutObject` (raw), `s3:GetObject` (processed), and for account erasure `s3:ListBucketVersions`, `s3:ListBucket`, `s3:DeleteObject` and `s3:DeleteObjectVersion` on both buckets, plus `sqs:SendMessage` on both queues, `rds-data:ExecuteStatement`/`BeginTransaction`/`CommitTransaction`/`RollbackTransaction` on the cluster, `secretsmanager:GetSecretValue` on the DB secret, and `bedrock:InvokeModel` for the configured model.
+- **IAM for the executor:** the same S3 version permissions on the raw bucket. Without `s3:ListBucketVersions` it falls back to deleting only the two known raw keys.
+- **Reconciler schedule:** something must call `GET /api/cron/reconcile-runs` with `Authorization: Bearer $CRON_SECRET` every few minutes. `vercel.json` defines no cron. The project's earlier documentation describes an EventBridge rule running every 5 minutes.
+
 ---
+
+## Operations runbook
+
+**Logs.** Server routes write one JSON object per line (`src/lib/logger.ts`): `{"ts","level","msg","service","route",...}`. Filter by `run_id`, `route` or `level`. Credential-like keys are redacted. Lambdas log plain text to CloudWatch.
+
+| Symptom | What to check / do |
+|---|---|
+| Run stuck in `profiling`/`awaiting_ai`/`queued`/`running` | `reconcile-runs` marks these `failed` after 20 minutes, so confirm the scheduler is calling it. For `queued`: if the log has `SQS send failed; run left queued without a message`, re-send the message: `aws sqs send-message --queue-url "$SQS_QUEUE_URL" --message-body '{"run_id":"<id>"}'`. This is safe because execution is idempotent. |
+| Run `failed` with `Attempt n/3 failed, retrying` history | Transient errors are retried by SQS up to `EXECUTOR_MAX_ATTEMPTS`; the last attempt marks the run failed. Check executor CloudWatch logs for the run id. |
+| Approved rule shows **Not applied** | Expected when a rule is unsafe or invalid (the reason is shown). The rest of the run is unaffected. |
+| User reports the file is missing `__orig_*` original values | By design. They are in `processed/{pipeline}/{run}/audit.csv`. |
+| **Export As** fails but download works | CORS on the processed bucket (see Deployment). |
+| `DELETE /api/account` returns 500 "No account data was removed" | S3 purge failed. Search logs for `S3 purge incomplete` / `S3 purge failed`, fix the IAM permissions, and have the user retry. The database is left intact so the retry is complete. `all_versions_purged: false` in a 200 response means `s3:ListBucketVersions` is missing. |
+| Startup log `invalid or missing environment` | Set the listed variables in Vercel and redeploy. |
+| Rotating `WEBHOOK_SECRET` | Update the Vercel env **and** the profiler and ai-trigger Lambdas together. Requests fail with 401 while they differ. |
+| AI spend | `GET /api/admin/ai-spend` with `x-admin-secret` lists the current month's estimated spend per team. |
+
+---
+
+## Security model
+
+What the code does today. Settings that live only in AWS are listed as such.
+
+- **Authentication.** Clerk. `src/middleware.ts` protects the app pages and user API routes, and each route also calls `auth()` and returns 401 without a user.
+- **Tenant isolation is enforced in application code**, not by the database. Every user query filters on `pipelines.team_id = <Clerk user id>`. `queryWithTeam()` sets `app.team_id` for the transaction, but **no Row-Level Security policies are defined** in `schema.sql`, so that setting currently has no effect. A missing `team_id` predicate in a new query would leak data across tenants.
+- **Service-to-service calls** (Lambdas → webhooks, cron, admin) use shared secrets compared with `safeCompare` (`src/lib/secrets.ts`: SHA-256 then `timingSafeEqual`). It fails closed when the expected secret is not configured.
+- **File access.** Uploads go straight to S3 with a 300 s presigned PUT; downloads use a 120 s presigned GET for the caller's own completed run. Files never pass through the serverless function.
+- **Data lifecycle.**
+  - After a successful execution, the executor deletes every object version under the run's raw prefix (`{user}/{pipeline}/{run}/`), including `extracted_text.txt` (`auto_delete_raw`, on by default).
+  - Raw files of **failed** runs are not deleted, and there are no S3 lifecycle rules in the repo.
+  - `DELETE /api/account?confirm=true` purges every version and delete marker under the user's raw prefix and their pipelines' processed prefixes, then deletes the DB rows. If S3 fails it aborts before touching the DB.
+- **AI.** Uploaded content is sent to Amazon Bedrock and wrapped in `<user_data>` tags with an instruction to treat it as data. This reduces prompt-injection risk but does not prevent it, which is why rules need approval (or the committee in auto mode). The monthly AI spend cap is checked in `suggest-transforms` only.
+- **Abuse limits.** Upstash sliding-window limits per user: 20 uploads/h, 50 AI calls/h, 30 chat messages/h. They fail open when Redis is not configured.
+- **Headers.** A CSP is set in `next.config.ts`. It allows `'unsafe-inline'` and `'unsafe-eval'` for scripts (needed by Next.js and Clerk without nonces).
+- **Secrets.** Nothing secret is committed. `.env.example` has placeholders only, and `run-migration.mjs` reads the database host from the environment. AWS account ids and ARNs from older commits remain in git history.
+
+Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+
+---
+
+## Known limitations
+
+- **No RLS.** Isolation depends on every query including the `team_id` predicate (see above).
+- **No infrastructure as code.** Buckets, queues, IAM, KMS, Lambda timeouts, DLQs, CORS and the cron schedule are configured by hand and cannot be reviewed or reproduced from the repo.
+- **No automatic re-enqueue.** If the SQS send after approval fails, the run stays `queued` until the reconciler marks it failed (see the runbook).
+- **No retention enforcement.** Raw files of failed runs stay in S3; `data_retention_days` is not enforced.
+- **Downloads are served as stored.** Deliverables produced before the sidecar split may still contain `__orig_*` columns. **Export As** and the training export strip them; the native download does not. Re-run those pipelines to regenerate them.
+- **Excel blanks are not counted as nulls** by the profiler (cells are read as empty strings). Before/after scores are still computed the same way.
+- **AI spend cap coverage.** The cap is checked before `suggest-transforms` only. Committee calls are metered but not blocked, and chat-builder calls are neither metered nor blocked.
+- **No upload size limit**, and `semantic_deduplicate` is O(n²). Large files can exhaust the executor Lambda.
+- **Schema drift alerts** store their diff inside `column_definitions`, so the next alert reports a phantom `_diff` column.
+- **Templates** copy approved rules from all recent runs of a pipeline, not only the latest run.
+- **`middleware.ts`** uses the file convention that Next.js 16 deprecated in favour of `proxy.ts`. It still works; the rename is pending a test against real Clerk keys.
+- **Parquet** is neither accepted for upload nor produced as output.
+- **Dev-only advisories.** `npm audit` reports 4 moderate advisories in drizzle-kit's bundled esbuild (dev dependency only).
+- **CI is defined but not enabled** until the workflow file is moved into `.github/workflows/`.
+
+---
+
+## Transform rules
+
+The model can only suggest rules the executor implements (a contract test compares the two lists). Risk tiers decide how many committee votes a rule needs in auto mode: LOW 1/3, MEDIUM 2/3, HIGH 3/3.
+
+### Tabular
+
+| Rule | What it does |
+|---|---|
+| `trim_whitespace` | Strip leading/trailing whitespace in text columns |
+| `deduplicate` | Drop exact duplicate rows (row-loss guard 20%) |
+| `semantic_deduplicate` | Drop near-duplicate rows (MinHash) |
+| `fill_nulls` | Fill nulls (mean / median / mode / constant); original kept in the audit file |
+| `drop_nulls` | With a column: drop rows where that column is null. Without: drop rows with at least `ceil(threshold × columns)` nulls |
+| `type_cast` | Cast to float / int / datetime / str. Not applied if values would be lost (e.g. `2.5` → int) |
+| `normalize` | Text/date columns only: dates → `YYYY-MM-DD`, other text trimmed and lower-cased (or mapped via `value_map`); nulls stay null. Numeric columns are left unchanged |
+| `filter`, `filter_extended` | Remove rows by condition (row-loss guard 20%) |
+| `rename`, `column_header_normalize` | Rename columns / snake_case headers |
+| `ner_redact` | Regex-based redaction (name, organisation, address/ZIP, date patterns). Heuristic, not a trained NER model |
+| `ffill`, `bfill` | Fill nulls from the previous/next row (signal-gated) |
+| `bool_cast` | Normalise yes/no/true/false/1/0 variants |
+| `outlier_cap` | Cap values at the IQR fences |
+| `multi_currency_strip` | Strip currency symbols and convert to numbers |
+| `split_column` | Split a column on a delimiter into new columns |
+
+### Documents (PDF, DOCX, TXT)
+
+`strip_pii`, `ner_redact`, `fix_encoding`, `remove_headers_footers`, `remove_blank_lines`, `normalize_whitespace`, `strip_html`, `redact_pattern` (pattern length capped at 200 characters; no protection against catastrophic backtracking).
+
+Accepted uploads: CSV, TSV, TXT, JSON, JSONL, XLSX, XLS (delivered as XLSX), XML, PDF, DOCX.
+
+---
+
+## Project layout
+
+```
+src/app/            pages and API routes (api/*/route.ts)
+src/components/     React components
+src/lib/            db (Data API), env, logger, secrets, ai-config, s3-erase,
+                    download/training-export helpers, schema.sql, migrations/
+lambdas/            profiler, executor, ai-trigger, drift handlers + tests/
+ci/                 verify.sh and the (not yet enabled) GitHub Actions workflow
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md) for reporting issues.
 
 ## License
 
-MIT
+The project was published as MIT, but no `LICENSE` file has been committed yet.
