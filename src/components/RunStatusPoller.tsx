@@ -17,7 +17,10 @@ export default function RunStatusPoller({
 }) {
   const router = useRouter();
   const routerRef = useRef(router);
-  routerRef.current = router;
+  // Keep the latest router in the ref without writing to a ref during render
+  useEffect(() => {
+    routerRef.current = router;
+  }, [router]);
   const statusRef = useRef(currentStatus);
   const attemptRef = useRef(0);
 
@@ -61,7 +64,6 @@ export default function RunStatusPoller({
     schedule();
     return () => clearTimeout(timeoutId);
   // router excluded from deps — stable ref via routerRef prevents stale closure + multiple poll loops
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, currentStatus, pipelineId]);
 
   return null;
