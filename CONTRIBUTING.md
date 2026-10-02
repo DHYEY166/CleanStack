@@ -84,6 +84,9 @@ Rules for test-only code (see README, "Test-only switches"):
 - **Guests:** a `guest_…` id (`src/lib/guest.ts`) is a normal `team_id`, so tenant queries need
   no change. Anything new that costs money (AI, storage, email) or is irreversible must check
   `isGuestId()` and apply the limits in `src/lib/guest-limits.ts`; add a test with a guest id.
+- **Erasure:** anything that deletes a team's data goes through `eraseTeam()` in
+  `src/lib/erase-team.ts` (S3 every version first, then rows). A new table keyed by `team_id`
+  must be added there, or account deletion and the guest purge will leave it behind.
 - **Uploads:** the browser uploads with a presigned POST from `/api/upload`. Size limits live in
   `src/lib/upload-limits.ts` and are mirrored in `lambdas/profiler/handler.py`; change both
   together.
