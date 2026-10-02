@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { safeCompare } from "@/lib/secrets";
 import { generateText, type LanguageModelUsage } from "ai";
 
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
 import { meterBedrockCall } from "@/lib/bedrock-meter";
 import type { TransformRule, DataProfile } from "@/lib/types";
+import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/auto-validate" });
 
 export const maxDuration = 120;
 
-const sqs = new SQSClient({ region: process.env.AWS_REGION ?? "us-east-1" });
+const sqs = new SQSClient({ region: awsRegion() });
 
 // Risk tiers — votes needed to approve
 const RISK_THRESHOLDS: Record<string, number> = {
@@ -78,14 +79,14 @@ async function runConsultant(
 ): Promise<{ votes: VoteResult[]; usage: LanguageModelUsage }> {
   try {
     const result = await generateText({
-      model: bedrock("us.anthropic.claude-sonnet-4-6"),
+      model: bedrock(BEDROCK_MODEL_ID),
       system: systemPrompt,
       prompt: userPrompt,
       maxOutputTokens: 1500,
     });
     return { votes: parseVotes(result.text, rules), usage: result.usage };
   } catch (e) {
-    console.error(`[auto-validate] ${persona} failed:`, e);
+    log.error("committee persona failed", { persona, err: e });
     // On error, approve all LOW risk, reject HIGH risk (conservative fallback)
     return { votes: rules.map((r) => ({
       rule_id: r.id,
@@ -99,9 +100,9 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ runId: string }> }
 ) {
-  const expectedSecret = process.env.WEBHOOK_SECRET ?? "";
+  const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
-    console.error("[auto-validate] WEBHOOK_SECRET not set — rejecting request");
+    log.error("WEBHOOK_SECRET not set; rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const secret = req.headers.get("x-webhook-secret");
@@ -201,13 +202,12 @@ ${responseFormat}`,
 
   // Meter all 3 Bedrock calls
   if (pipelineRow?.team_id) {
-    const MODEL = "us.anthropic.claude-sonnet-4-6";
     [
       { r: auditorResult, type: "auto_validate_auditor" },
       { r: statResult, type: "auto_validate_stat" },
       { r: domainResult, type: "auto_validate_domain" },
     ].forEach(({ r, type }) =>
-      meterBedrockCall({ teamId: pipelineRow.team_id, runId, callType: type, model: MODEL, usage: r.usage })
+      meterBedrockCall({ teamId: pipelineRow.team_id, runId, callType: type, model: BEDROCK_MODEL_ID, usage: r.usage })
     );
   }
 
@@ -249,18 +249,18 @@ ${responseFormat}`,
     ),
   ]);
 
-  if (approved.length > 0 && process.env.SQS_QUEUE_URL) {
+  if (approved.length > 0 && optionalEnv("SQS_QUEUE_URL")) {
     // Set status before SQS so reconciler can pick up the run if SQS fails
     await queryOne("UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1", [runId]);
     try {
       await sqs.send(
         new SendMessageCommand({
-          QueueUrl: process.env.SQS_QUEUE_URL,
+          QueueUrl: requireEnv("SQS_QUEUE_URL"),
           MessageBody: JSON.stringify({ run_id: runId }),
         })
       );
     } catch (sqsErr) {
-      console.error(`[auto-validate] SQS send failed for run ${runId} — reconciler will retry:`, sqsErr);
+      log.error("SQS send failed; run left queued without a message (no automatic re-enqueue)", { run_id: runId, err: sqsErr });
     }
   } else {
     // No approved rules — mark completed, nothing to execute

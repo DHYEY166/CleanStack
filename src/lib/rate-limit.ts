@@ -22,6 +22,9 @@ export const aiLimiter = getRatelimiter(50, "1 h");           // 50 AI calls/hr 
 export const chatLimiter = getRatelimiter(30, "1 h");         // 30 chat msgs/hr per user
 
 import { NextResponse } from "next/server";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ component: "rate-limit" });
 
 /**
  * null = allowed, otherwise a 429 response.
@@ -44,13 +47,7 @@ export async function checkRateLimit(
     // Fail open: an Upstash outage must not take uploads/AI routes down.
     // Quota limits (the billing control) are enforced from Postgres, so the
     // only thing lost while Redis is down is burst protection.
-    const e = err as Error & { cause?: { message?: string } };
-    console.warn(JSON.stringify({
-      level: "warn",
-      msg: "Upstash rate limiter unavailable; allowing request (check UPSTASH_REDIS_REST_URL/TOKEN)",
-      component: "rate-limit",
-      err: { name: e?.name, message: e?.message, cause: e?.cause?.message },
-    }));
+    log.warn("Upstash rate limiter unavailable; allowing request (check UPSTASH_REDIS_REST_URL/TOKEN)", { err });
     return null;
   }
   const { success, limit, remaining, reset } = result;

@@ -8,8 +8,12 @@ import {
   attachmentDisposition,
   describeDeliverable,
 } from "@/lib/download";
+import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+const log = logger.child({ route: "GET /api/download" });
+
+const s3 = new S3Client({ region: awsRegion() });
 
 /**
  * Returns a short-lived presigned S3 URL for a completed run's deliverable.
@@ -42,11 +46,7 @@ export async function GET(
       return NextResponse.json({ error: "No processed file found" }, { status: 404 });
     }
 
-    const bucket = process.env.S3_PROCESSED_BUCKET;
-    if (!bucket) {
-      console.error("[GET /api/download] S3_PROCESSED_BUCKET is not set");
-      return NextResponse.json({ error: "Internal server error" }, { status: 500 });
-    }
+    const bucket = requireEnv("S3_PROCESSED_BUCKET"); // ConfigError -> 500 below
 
     const d = describeDeliverable(runId, run.processed_s3_key, run.file_format);
     const url = await getSignedUrl(
@@ -65,7 +65,7 @@ export async function GET(
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (err) {
-    console.error("[GET /api/download]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

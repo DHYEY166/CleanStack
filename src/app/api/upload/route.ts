@@ -7,8 +7,12 @@ import { queryOne, queryOneWithTeam } from "@/lib/db";
 import { getCachedQuota } from "@/lib/quota-cache";
 import { uploadLimiter, checkRateLimit } from "@/lib/rate-limit";
 import type { PipelineRun } from "@/lib/types";
+import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+const log = logger.child({ route: "POST /api/upload" });
+
+const s3 = new S3Client({ region: awsRegion() });
 
 const ALLOWED_EXTENSIONS = new Set([
   "csv", "tsv", "txt", "json", "jsonl",
@@ -49,7 +53,10 @@ const STAGE_MESSAGES: Record<Stage, string> = {
  * Clerk email lookup and the quota query ran outside it, so any throw there
  * escaped the handler and Next.js answered 500 with an EMPTY body, which the
  * browser reported as "Unexpected end of JSON input". In production that
- * throw was the Upstash rate limiter failing DNS; see checkRateLimit.
+ * throw was the Upstash rate limiter failing DNS ("TypeError: fetch failed
+ * ... getaddrinfo"); see checkRateLimit. Failures now return JSON naming the step
+ * that failed and are logged with the same `stage`, so Vercel runtime logs
+ * show the underlying error.
  */
 export async function POST(req: NextRequest) {
   let stage: Stage = "auth";
@@ -69,7 +76,7 @@ export async function POST(req: NextRequest) {
       const user = await currentUser();
       email = user?.primaryEmailAddress?.emailAddress ?? null;
     } catch (err) {
-      console.warn("[POST /api/upload] could not load the user's email; admin bypass not applied", err);
+      log.warn("could not load the user's email; admin bypass not applied", { stage, err });
     }
 
     stage = "quota";
@@ -122,7 +129,7 @@ export async function POST(req: NextRequest) {
 
     stage = "presign";
     const command = new PutObjectCommand({
-      Bucket: process.env.S3_RAW_BUCKET,
+      Bucket: requireEnv("S3_RAW_BUCKET"),
       Key: s3Key,
       ContentType: content_type,
     });
@@ -131,7 +138,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
   } catch (err) {
-    console.error(`[POST /api/upload] failed at stage ${stage}`, err);
+    log.error("upload failed", { stage, err });
     return NextResponse.json(
       { error: `Upload could not be started: ${STAGE_MESSAGES[stage]} Please retry.`, stage },
       { status: stage === "quota" || stage === "auth" ? 503 : 500 }

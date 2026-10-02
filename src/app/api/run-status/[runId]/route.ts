@@ -1,6 +1,9 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { queryOneWithTeam } from "@/lib/db";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "GET /api/run-status" });
 
 export async function GET(
   _req: NextRequest,
@@ -45,7 +48,7 @@ export async function GET(
 
     return NextResponse.json({ run, child_run_id });
   } catch (err) {
-    console.error("[GET /api/run-status]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

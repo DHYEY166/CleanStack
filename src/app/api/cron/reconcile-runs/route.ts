@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { safeCompare } from "@/lib/secrets";
 import { query } from "@/lib/db";
+import { optionalEnv } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
+const log = logger.child({ route: "GET /api/cron/reconcile-runs" });
 
 export const maxDuration = 30;
 
@@ -13,7 +12,7 @@ const STUCK_AFTER_MINUTES = 20;
 const PENDING_ORPHAN_AFTER_MINUTES = 60;
 
 export async function GET(req: Request) {
-  const expectedCronSecret = process.env.CRON_SECRET ?? "";
+  const expectedCronSecret = optionalEnv("CRON_SECRET") ?? "";
   if (!expectedCronSecret || !safeCompare(req.headers.get("Authorization") ?? "", `Bearer ${expectedCronSecret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -46,6 +45,6 @@ export async function GET(req: Request) {
   );
 
   const totalFixed = updated.length + pendingCleaned.length;
-  console.log(`[reconciler] Marked ${updated.length} stuck runs + ${pendingCleaned.length} orphan pending runs as failed`);
+  log.info("reconciled runs", { stuck_failed: updated.length, pending_failed: pendingCleaned.length });
   return NextResponse.json({ fixed: totalFixed, stuck: updated.map((r) => r.id), orphaned: pendingCleaned.map((r) => r.id) });
 }

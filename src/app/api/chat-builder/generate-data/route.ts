@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { generateText } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/chat-builder/generate-data" });
 
 export const maxDuration = 60;
 
@@ -112,7 +116,7 @@ Requirements:
   let rows: Record<string, unknown>[];
   try {
     const { text } = await generateText({
-      model: bedrock("us.anthropic.claude-sonnet-4-6"),
+      model: bedrock(BEDROCK_MODEL_ID),
       prompt,
       maxOutputTokens: 4000,
     });
@@ -122,7 +126,7 @@ Requirements:
     rows = JSON.parse(cleaned);
     if (!Array.isArray(rows)) throw new Error("Not an array");
   } catch (err) {
-    console.error("[generate-data] AI/parse error:", err);
+    log.error("AI generation or parse failed", { err });
     return NextResponse.json({ error: "Failed to generate data" }, { status: 500 });
   }
 
@@ -164,7 +168,7 @@ Requirements:
       },
     });
   } catch (err) {
-    console.error("[generate-data] format error:", err);
+    log.error("format conversion failed", { err });
     return NextResponse.json({ error: "Format conversion failed" }, { status: 500 });
   }
 }

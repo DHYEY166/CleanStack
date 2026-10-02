@@ -4,8 +4,12 @@ import { S3Client, CopyObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import type { PipelineRun } from "@/lib/types";
+import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+const log = logger.child({ route: "POST /api/runs/auto-clean" });
+
+const s3 = new S3Client({ region: awsRegion() });
 
 export async function POST(
   _req: NextRequest,
@@ -44,8 +48,8 @@ export async function POST(
     // S3 copy first — if it throws, no DB record is created (no stuck placeholder)
     await s3.send(
       new CopyObjectCommand({
-        Bucket: process.env.S3_RAW_BUCKET!,
-        CopySource: `${process.env.S3_PROCESSED_BUCKET}/${run.processed_s3_key}`,
+        Bucket: requireEnv("S3_RAW_BUCKET"),
+        CopySource: `${requireEnv("S3_PROCESSED_BUCKET")}/${run.processed_s3_key}`,
         Key: newRawKey,
       })
     );
@@ -67,7 +71,7 @@ export async function POST(
       auto_mode: true,
     });
   } catch (err) {
-    console.error("[auto-clean]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -2,6 +2,9 @@ import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne, queryWithTeam } from "@/lib/db";
 import type { Pipeline } from "@/lib/types";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "/api/pipelines" });
 
 export async function GET() {
   const { userId } = await auth();
@@ -15,7 +18,7 @@ export async function GET() {
     );
     return NextResponse.json({ pipelines });
   } catch (err) {
-    console.error("[GET /api/pipelines]", err);
+    log.error("GET failed", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
@@ -40,7 +43,7 @@ export async function POST(req: NextRequest) {
     );
     return NextResponse.json({ pipeline }, { status: 201 });
   } catch (err) {
-    console.error("[POST /api/pipelines]", err);
+    log.error("POST failed", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

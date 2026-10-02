@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne, queryOneWithTeam, withTransaction } from "@/lib/db";
+import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/approve-rules" });
 
 interface RuleDecision {
   rule_id: string;
@@ -9,7 +13,7 @@ interface RuleDecision {
   modifications: Record<string, unknown> | null;
 }
 
-const sqs = new SQSClient({ region: process.env.AWS_REGION ?? "us-east-1" });
+const sqs = new SQSClient({ region: awsRegion() });
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -50,7 +54,7 @@ export async function POST(req: NextRequest) {
     }
 
     const approved = rule_decisions.filter((d) => d.action === "approved").length;
-    const nextStatus = approved > 0 && process.env.SQS_QUEUE_URL ? "queued" : "completed";
+    const nextStatus = approved > 0 && optionalEnv("SQS_QUEUE_URL") ? "queued" : "completed";
 
     // Wrap the status transition + rule updates + audit insert in one transaction.
     // The conditional UPDATE is the concurrency guard: of two simultaneous
@@ -99,7 +103,7 @@ export async function POST(req: NextRequest) {
       try {
         await sqs.send(
           new SendMessageCommand({
-            QueueUrl: process.env.SQS_QUEUE_URL,
+            QueueUrl: requireEnv("SQS_QUEUE_URL"),
             MessageBody: JSON.stringify({ run_id }),
           })
         );
@@ -107,13 +111,13 @@ export async function POST(req: NextRequest) {
         // The run stays 'queued' with no message. Nothing re-enqueues it: the
         // reconcile-runs cron only marks stale runs 'failed' (see README "Known
         // limitations"). An operator can re-send {"run_id": ...} to the queue.
-        console.error("[approve-rules] SQS send failed; run left queued without a message:", run_id, sqsErr);
+        log.error("SQS send failed; run left queued without a message", { run_id, err: sqsErr });
       }
     }
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("[POST /api/approve-rules]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

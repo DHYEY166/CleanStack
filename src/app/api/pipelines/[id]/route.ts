@@ -1,6 +1,9 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "DELETE /api/pipelines/[id]" });
 
 export async function DELETE(
   _req: NextRequest,
@@ -30,7 +33,7 @@ export async function DELETE(
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("[DELETE /api/pipelines/[id]]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

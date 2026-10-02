@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { safeCompare } from "@/lib/secrets";
 import { generateText, Output } from "ai";
 
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { checkQuota } from "@/lib/billing";
 import { clerkClient } from "@clerk/nextjs/server";
 import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
@@ -16,6 +13,10 @@ export const maxDuration = 300;
 import { z } from "zod";
 import { queryOne, query } from "@/lib/db";
 import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@/lib/types";
+import { requireEnv, optionalEnv } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/suggest-transforms" });
 
 const ruleSchema = z.object({
   rule_type: z.enum([
@@ -70,9 +71,9 @@ const documentOutputSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const expectedSecret = process.env.WEBHOOK_SECRET ?? "";
+  const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
-    console.error("[suggest-transforms] WEBHOOK_SECRET not set — rejecting request");
+    log.error("WEBHOOK_SECRET not set; rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const secret = req.headers.get("x-webhook-secret");
@@ -307,14 +308,14 @@ IMPORTANT RULES:
     let docOutput: { rules: Array<{ rule_type: string; column_name: null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
     try {
       const result = await generateText({
-        model: bedrock("us.anthropic.claude-sonnet-4-6"),
+        model: bedrock(BEDROCK_MODEL_ID),
         output: Output.object({ schema: documentOutputSchema }),
         prompt: docPrompt,
       });
       docOutput = result.output;
-      meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
+      meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: BEDROCK_MODEL_ID, usage: result.usage });
     } catch (aiErr) {
-      console.error("[suggest-transforms] Bedrock document error:", aiErr);
+      log.error("Bedrock document suggestion failed", { run_id, err: aiErr });
       await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, `AI error: ${String(aiErr)}`]);
       return NextResponse.json({ error: "AI processing error" }, { status: 500 });
@@ -346,14 +347,14 @@ IMPORTANT RULES:
       )
     );
     if (run.auto_mode) {
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      const baseUrl = requireEnv("NEXT_PUBLIC_APP_URL");
       const avRes = await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
         method: "POST",
-        headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
+        headers: { "x-webhook-secret": optionalEnv("WEBHOOK_SECRET") ?? "" },
       });
       if (!avRes.ok) {
         const body = await avRes.text().catch(() => "");
-        console.error(`[suggest-transforms] auto-validate ${avRes.status}: ${body}`);
+        log.error("auto-validate call failed", { run_id, status: avRes.status, body: body.slice(0, 500) });
         await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
           [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
       }
@@ -650,14 +651,14 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   let output: { rules: Array<{ rule_type: string; column_name: string | null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
   try {
     const result = await generateText({
-      model: bedrock("us.anthropic.claude-sonnet-4-6"),
+      model: bedrock(BEDROCK_MODEL_ID),
       output: Output.object({ schema: outputSchema }),
       prompt,
     });
     output = result.output;
-    meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
+    meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: BEDROCK_MODEL_ID, usage: result.usage });
   } catch (aiErr) {
-    console.error("[suggest-transforms] Bedrock error:", aiErr);
+    log.error("Bedrock tabular suggestion failed", { run_id, err: aiErr });
     await queryOne(
       "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
       [run_id, `AI error: ${String(aiErr)}`]
@@ -693,14 +694,14 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   );
 
   if (run.auto_mode) {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const baseUrl = requireEnv("NEXT_PUBLIC_APP_URL");
     const avRes = await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
       method: "POST",
-      headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
+      headers: { "x-webhook-secret": optionalEnv("WEBHOOK_SECRET") ?? "" },
     });
     if (!avRes.ok) {
       const body = await avRes.text().catch(() => "");
-      console.error(`[suggest-transforms] auto-validate ${avRes.status}: ${body}`);
+      log.error("auto-validate call failed", { run_id, status: avRes.status, body: body.slice(0, 500) });
       await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
         [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
     }
@@ -713,7 +714,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
 
   return NextResponse.json({ ok: true, rules_count: output.rules.length });
   } catch (err) {
-    console.error("[suggest-transforms] unhandled error:", err);
+    log.error("unhandled error", { err });
     try {
       await queryOne(
         "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
