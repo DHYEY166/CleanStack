@@ -10,6 +10,8 @@ interface Props {
   improvement: number | null;
   processedScore: number | null;
   autoMode?: boolean;
+  /** false for guests: auto-clean is a signed-in feature. */
+  autoCleanAllowed?: boolean;
 }
 
 export default function IterationBanner({
@@ -19,6 +21,7 @@ export default function IterationBanner({
   improvement,
   processedScore,
   autoMode = false,
+  autoCleanAllowed = true,
 }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -60,7 +63,7 @@ export default function IterationBanner({
     ? "AI committee validated this pass. Further passes will also be auto-validated."
     : "Run remaining passes automatically — AI committee reviews each rule.";
 
-  const showButton = !atCap && !regressed && !autoMode;
+  const showButton = !atCap && !regressed && !autoMode && autoCleanAllowed;
 
   return (
     <div

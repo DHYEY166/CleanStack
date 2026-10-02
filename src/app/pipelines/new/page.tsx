@@ -6,6 +6,7 @@ import Nav from "@/components/Nav";
 import PipelineChat from "@/components/PipelineChat";
 import { readJson } from "@/lib/http";
 import { formatMb } from "@/lib/upload-limits";
+import { useIsGuest } from "@/components/Guest";
 import {
   Upload,
   Sparkles,
@@ -49,6 +50,8 @@ export default function NewPipelinePage() {
   // Per-file limit from GET /api/upload (100 MB by default, 2 MB for guests). The
   // server and S3 enforce it regardless; this only saves a doomed upload.
   const [maxBytes, setMaxBytes] = useState<number | null>(null);
+  // The chat builder is not available to guests (src/lib/guest-limits.ts).
+  const guest = useIsGuest();
 
   useEffect(() => {
     fetch("/api/upload")
@@ -170,8 +173,8 @@ export default function NewPipelinePage() {
         </p>
 
         {/* Tabs */}
-        <div className="grid grid-cols-2 gap-1 mb-8 bg-gray-900 border border-gray-800 rounded-xl p-1">
-          {(["upload", "chat"] as Tab[]).map((t) => (
+        <div className={`grid ${guest ? "grid-cols-1" : "grid-cols-2"} gap-1 mb-8 bg-gray-900 border border-gray-800 rounded-xl p-1`}>
+          {((guest ? ["upload"] : ["upload", "chat"]) as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -197,7 +200,7 @@ export default function NewPipelinePage() {
         </div>
 
         {/* Chat tab */}
-        {tab === "chat" && (
+        {tab === "chat" && !guest && (
           <PipelineChat onApply={handleChatApply} />
         )}
 

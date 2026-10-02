@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth";
+import { auth, isGuestId } from "@/lib/auth";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
@@ -247,7 +247,7 @@ export default async function RunDetailPage({
         </div>
 
         {/* AI Training Export — tabular completed runs only */}
-        {canDownload && run.mode !== "document" && (
+        {canDownload && run.mode !== "document" && !isGuestId(userId ?? "") && (
           <TrainingExport runId={rid} />
         )}
 
@@ -260,6 +260,7 @@ export default async function RunDetailPage({
             improvement={iterationImprovement}
             processedScore={processedProfile?.quality_score != null ? Number(processedProfile.quality_score) : null}
             autoMode={run.auto_mode ?? false}
+            autoCleanAllowed={!isGuestId(userId ?? "")}
           />
         )}
 
