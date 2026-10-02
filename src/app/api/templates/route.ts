@@ -34,12 +34,15 @@ export async function POST(req: NextRequest) {
   );
   if (!pipeline) return NextResponse.json({ error: "Pipeline not found" }, { status: 404 });
 
-  // Grab approved rules from most recent completed run
+  // Grab approved rules from most recent completed run. Executor bookkeeping
+  // (parameters._execution) is dropped, and rules the executor recorded as not
+  // applied are excluded so a template only replays rules that actually ran.
   const rules = await query<TemplateRule>(
-    `SELECT rule_type, column_name, parameters, ai_reasoning
+    `SELECT rule_type, column_name, (tr.parameters - '_execution') AS parameters, ai_reasoning
      FROM transform_rules tr
      JOIN pipeline_runs pr ON tr.run_id = pr.id
      WHERE pr.pipeline_id = $1 AND tr.status = 'approved'
+       AND COALESCE(tr.parameters->'_execution'->>'applied', 'true') <> 'false'
      ORDER BY pr.created_at DESC, tr.order_index ASC
      LIMIT 50`,
     [pipeline_id]
