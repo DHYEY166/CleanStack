@@ -10,10 +10,7 @@ const h = vi.hoisted(() => ({
   getSignedUrl: vi.fn(),
 }));
 
-vi.mock("@clerk/nextjs/server", () => ({
-  auth: () => h.auth(),
-  currentUser: async () => { const e = await h.email(); return e ? { primaryEmailAddress: { emailAddress: e } } : null; },
-}));
+vi.mock("@/lib/auth", () => ({ auth: () => h.auth(), currentUserEmail: () => h.email() }));
 vi.mock("@/lib/quota-cache", () => ({ getCachedQuota: (...a: unknown[]) => h.quota(...a) }));
 vi.mock("@/lib/db", () => ({
   queryOneWithTeam: (...a: unknown[]) => h.queryOneWithTeam(...a),

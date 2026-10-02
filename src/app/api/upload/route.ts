@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth, currentUserEmail } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -12,7 +12,11 @@ import { logger } from "@/lib/logger";
 
 const log = logger.child({ route: "POST /api/upload" });
 
-const s3 = new S3Client({ region: awsRegion() });
+// Presigning only. Since SDK 3.729 the default (WHEN_SUPPORTED) bakes a CRC32 of the
+// *empty* body (x-amz-checksum-crc32=AAAAAA==) into presigned PutObject URLs, so the
+// browser's real upload does not match it (LocalStack rejects it with 400; see
+// aws/aws-sdk-js-v3#6810). WHEN_REQUIRED restores the pre-3.729 URL shape.
+const s3 = new S3Client({ region: awsRegion(), requestChecksumCalculation: "WHEN_REQUIRED" });
 
 const ALLOWED_EXTENSIONS = new Set([
   "csv", "tsv", "txt", "json", "jsonl",
@@ -73,8 +77,7 @@ export async function POST(req: NextRequest) {
     stage = "user_email";
     let email: string | null = null;
     try {
-      const user = await currentUser();
-      email = user?.primaryEmailAddress?.emailAddress ?? null;
+      email = await currentUserEmail();
     } catch (err) {
       log.warn("could not load the user's email; admin bypass not applied", { stage, err });
     }

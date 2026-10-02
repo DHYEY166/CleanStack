@@ -45,6 +45,32 @@ this repo. If your change touches the Lambdas, run that too:
 pip install pandas==3.0.6 numpy==2.5.3 && python -m pytest -q lambdas/tests
 ```
 
+### Integration and e2e suites
+
+They need Docker (Postgres + LocalStack). CI runs them in the `integration` and `e2e` jobs on every PR.
+Run them locally when you touch the database layer, S3/SQS code, the Lambdas, auth, or a user flow:
+
+```bash
+docker compose -f tests/support/docker-compose.yml up -d --wait
+npm run services:setup
+PYTHON=python npm run test:integration
+CLEANSTACK_INTEGRATION=1 python -m pytest -q lambdas/tests/integration
+npx playwright install --with-deps chromium     # once
+npm run e2e:build && PYTHON=python npm run test:e2e
+```
+
+On a CI e2e failure, download the `playwright-report` artifact. It has the HTML report and the
+traces; open a trace with `npx playwright show-trace test-results/<test>/trace.zip`.
+
+Rules for test-only code (see README, "Test-only switches"):
+
+- Gate it with `isTestMode()` from `src/lib/test-mode.ts`, nothing else, and add a test that it
+  is off without `CLEANSTACK_TEST_MODE=1` and when `VERCEL=1`.
+- Server code reads the user through `@/lib/auth`; eslint rejects `@clerk/nextjs/server`
+  imports elsewhere, so the auth bypass keeps a single entry point.
+- AI calls take their model from `languageModel()` (`src/lib/ai-model.ts`), never `bedrock()`
+  directly, so CI never reaches Bedrock.
+
 ## Conventions
 
 - **Configuration:** read environment variables through `src/lib/env.ts` (`requireEnv`,

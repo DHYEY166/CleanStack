@@ -13,6 +13,8 @@
  * Keep in sync with .env.example and the README configuration table.
  */
 
+import { hostedPlatformMarker } from "@/lib/test-mode";
+
 type Validator = (value: string) => string | null; // null = ok, otherwise reason
 
 const nonEmpty: Validator = () => null;
@@ -56,6 +58,10 @@ export const ENV_SPEC = {
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: { validate: nonEmpty, required: true, description: "Clerk publishable key (read by @clerk/nextjs)" },
   CLERK_SECRET_KEY: { validate: nonEmpty, required: true, description: "Clerk secret key (read by @clerk/nextjs)" },
   LOG_LEVEL: { validate: (v) => (["debug", "info", "warn", "error"].includes(v) ? null : "must be debug|info|warn|error"), required: false, description: "Structured logger threshold (default info)" },
+  // Test-only (honoured only when src/lib/test-mode.ts isTestMode() is true)
+  CLEANSTACK_TEST_MODE: { validate: (v) => (v === "1" || v === "0" ? null : 'must be "1" or "0"'), required: false, description: "TEST ONLY: enables the test-only switches; ignored on Vercel/Lambda" },
+  DB_DRIVER: { validate: (v) => (v === "data-api" || v === "pg" ? null : "must be data-api or pg"), required: false, description: 'TEST ONLY: "pg" = direct Postgres via DATABASE_URL (default data-api)' },
+  DATABASE_URL: { validate: nonEmpty, required: false, description: "TEST ONLY for the web app (DB_DRIVER=pg); also used by run-migration.mjs" },
   SENTRY_DSN: { validate: httpsUrl, required: false, description: "Server/edge Sentry DSN" },
   NEXT_PUBLIC_SENTRY_DSN: { validate: httpsUrl, required: false, description: "Browser Sentry DSN" },
 } satisfies Record<string, EnvSpec>;
@@ -121,6 +127,16 @@ export function checkEnv(source: EnvSource = process.env): EnvReport {
     if (spec.minSecretLength && value.length < spec.minSecretLength) {
       warnings.push(`${name} is shorter than ${spec.minSecretLength} characters`);
     }
+  }
+  const testFlag = read("CLEANSTACK_TEST_MODE", source) === "1";
+  const hosted = hostedPlatformMarker(source);
+  if (testFlag && hosted) {
+    errors.push(`CLEANSTACK_TEST_MODE=1 is set on a hosted platform (${hosted}); it is ignored there. Remove it.`);
+  } else if (testFlag) {
+    warnings.push("TEST MODE ENABLED: auth bypass, fake Bedrock and test DB driver are active. Never use outside tests.");
+  }
+  if (read("DB_DRIVER", source) === "pg" && !(testFlag && !hosted)) {
+    errors.push("DB_DRIVER=pg is only allowed in test mode; the app will refuse to query.");
   }
   if (read("AI_QUEUE_ENABLED", source) === "true" && read("AI_JOBS_QUEUE_URL", source) === undefined) {
     errors.push("AI_JOBS_QUEUE_URL is not set but AI_QUEUE_ENABLED=true");

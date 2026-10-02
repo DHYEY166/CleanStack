@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth, currentUserEmail } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { getCachedQuota } from "@/lib/quota-cache";
 
@@ -6,8 +6,7 @@ export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const user = await currentUser();
-  const email = user?.primaryEmailAddress?.emailAddress ?? null;
+  const email = await currentUserEmail();
 
   const quota = await getCachedQuota(userId, email, userId);
 

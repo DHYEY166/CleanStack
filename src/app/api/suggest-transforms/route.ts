@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { generateText, Output } from "ai";
 
-import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { languageModel } from "@/lib/ai-model";
 import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { checkQuota } from "@/lib/billing";
-import { clerkClient } from "@clerk/nextjs/server";
+import { userEmailById } from "@/lib/auth";
 import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 
@@ -119,9 +119,7 @@ export async function POST(req: NextRequest) {
       [run.pipeline_id]
     );
     if (pipelineRow) {
-      const clerk = await clerkClient();
-      const clerkUser = await clerk.users.getUser(pipelineRow.team_id).catch(() => null);
-      const ownerEmail = clerkUser?.emailAddresses?.[0]?.emailAddress ?? null;
+      const ownerEmail = await userEmailById(pipelineRow.team_id);
       const quota = await checkQuota(pipelineRow.team_id, ownerEmail, pipelineRow.team_id);
       if (quota.blocked) {
         await queryOne(
@@ -308,7 +306,7 @@ IMPORTANT RULES:
     let docOutput: { rules: Array<{ rule_type: string; column_name: null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
     try {
       const result = await generateText({
-        model: bedrock(BEDROCK_MODEL_ID),
+        model: languageModel(),
         output: Output.object({ schema: documentOutputSchema }),
         prompt: docPrompt,
       });
@@ -651,7 +649,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   let output: { rules: Array<{ rule_type: string; column_name: string | null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
   try {
     const result = await generateText({
-      model: bedrock(BEDROCK_MODEL_ID),
+      model: languageModel(),
       output: Output.object({ schema: outputSchema }),
       prompt,
     });

@@ -7,7 +7,9 @@ import {
   type SqlParameter,
   type Field,
 } from "@aws-sdk/client-rds-data";
-import { requireEnv, awsRegion } from "@/lib/env";
+import { ConfigError, awsRegion, optionalEnv, requireEnv } from "@/lib/env";
+import { parseDataApiString } from "@/lib/db-shape";
+import { isTestMode } from "@/lib/test-mode";
 
 const client = new RDSDataClient({
   region: awsRegion(),
@@ -22,6 +24,24 @@ function getArns() {
 
 
 const DATABASE = "cleanstack";
+
+/**
+ * Driver selection. Production always uses the RDS Data API. DB_DRIVER=pg
+ * (direct Postgres, src/lib/db-pg.ts) exists only for the integration and
+ * e2e suites and is refused unless isTestMode() is true, so it can never be
+ * switched on in a Vercel deployment.
+ */
+function pgDriverSelected(): boolean {
+  const driver = optionalEnv("DB_DRIVER") ?? "data-api";
+  if (driver !== "pg") return false;
+  if (!isTestMode()) {
+    throw new ConfigError("Configuration error: DB_DRIVER=pg is only allowed in test mode");
+  }
+  return true;
+}
+
+let pgAdapter: Promise<typeof import("./db-pg")> | null = null;
+const loadPg = () => (pgAdapter ??= import("./db-pg"));
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -124,13 +144,8 @@ function recordsToRows<T>(
       if (field.isNull) {
         row[col.name] = null;
       } else if ("stringValue" in field) {
-        const s = field.stringValue!;
         // Auto-parse JSONB columns returned as JSON strings
-        if (s.length > 0 && (s[0] === "{" || s[0] === "[")) {
-          try { row[col.name] = JSON.parse(s); } catch { row[col.name] = s; }
-        } else {
-          row[col.name] = s;
-        }
+        row[col.name] = parseDataApiString(field.stringValue!);
       } else if ("longValue" in field) {
         row[col.name] = field.longValue;
       } else if ("doubleValue" in field) {
@@ -152,6 +167,7 @@ export async function query<T = unknown>(
   params: unknown[] = [],
   transactionId?: string
 ): Promise<T[]> {
+  if (pgDriverSelected()) return (await loadPg()).pgQuery<T>(text, params, transactionId);
   const { clusterArn, secretArn } = getArns();
   const { sql, parameters } = convertQuery(text, params);
 
@@ -183,6 +199,7 @@ export async function queryOne<T = unknown>(
 export async function withTransaction<T>(
   fn: (txId: string) => Promise<T>
 ): Promise<T> {
+  if (pgDriverSelected()) return (await loadPg()).pgWithTransaction(fn);
   const { clusterArn, secretArn } = getArns();
   const begin = await client.send(
     new BeginTransactionCommand({

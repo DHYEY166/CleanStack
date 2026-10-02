@@ -1,0 +1,5 @@
+order_id,customer,amount,order_date
+1,  Alice  ,$10.50,2024-01-05
+2,Bob,20,01/06/2024
+3, Carol,30.25 ,2024-01-07
+4,Dan ,$5,2024/01/08

@@ -79,3 +79,8 @@ credentials.json
 .pytest_cache/
 .venv/
 __pycache__/
+
+# Playwright
+/playwright-report/
+/test-results/
+/blob-report/

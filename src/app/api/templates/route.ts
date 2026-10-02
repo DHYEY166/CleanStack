@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { query, queryOne } from "@/lib/db";
 import type { PipelineTemplate, TemplateRule } from "@/lib/types";
 
