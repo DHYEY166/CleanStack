@@ -6,6 +6,7 @@
  * in every other build the context stays undefined and these render nothing.
  */
 import { createContext, useContext } from "react";
+import { useRouter } from "next/navigation";
 
 const TestAuthContext = createContext<{ enabled: true } | undefined>(undefined);
 
@@ -18,6 +19,7 @@ export function useTestAuthEnabled(): boolean {
 }
 
 export function TestSignOutButton() {
+  const router = useRouter();
   return (
     <button
       type="button"
@@ -25,7 +27,8 @@ export function TestSignOutButton() {
       className="text-xs text-gray-400 hover:text-white"
       onClick={async () => {
         await fetch("/api/test-auth", { method: "DELETE" });
-        window.location.assign("/");
+        router.push("/");
+        router.refresh();
       }}
     >
       Sign out (test mode)
