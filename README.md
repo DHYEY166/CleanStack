@@ -104,7 +104,7 @@ python -m pytest -q lambdas/tests
 
 The Lambda tests import the real handlers. AWS clients are created but never called, and DB and S3 are faked inside the tests. CI runs them against both pandas 2.2.3 (pinned) and pandas 3.0.6.
 
-The workflow definition is `ci/github-actions-ci.yml`. It is **not active yet** because GitHub only runs workflows from `.github/workflows/`. To enable it, move the file there (`git mv ci/github-actions-ci.yml .github/workflows/ci.yml`) with a token that has the `workflow` scope.
+The workflow definition is `.github/workflows/ci.yml`. It runs on every pull request and on pushes to `main`.
 
 ---
 

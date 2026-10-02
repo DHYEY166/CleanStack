@@ -1,9 +1,4 @@
 # GitHub Actions CI. Runs the same gate as ci/verify.sh (see CONTRIBUTING.md).
-#
-# NOT ACTIVE YET: GitHub only runs workflows from .github/workflows/, and the
-# token that pushed this branch lacks the `workflow` scope, so the file is
-# parked here. To enable it (needs a token with `workflow` scope or the web UI):
-#   git mv ci/github-actions-ci.yml .github/workflows/ci.yml
 name: CI
 
 on:

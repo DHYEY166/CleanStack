@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local quality gate: the same steps as ci/github-actions-ci.yml.
+# Local quality gate: the same steps as .github/workflows/ci.yml.
 #   ci/verify.sh            # web + lambdas (uses ./.venv or $PYTHON for pytest)
 #   SKIP_BUILD=1 ci/verify.sh
 set -euo pipefail

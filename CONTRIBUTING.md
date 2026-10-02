@@ -37,7 +37,7 @@ npx eslint && npx tsc --noEmit && npx vitest run && npm run build
 python -m pytest -q lambdas/tests
 ```
 
-CI (`ci/github-actions-ci.yml`, to be moved into `.github/workflows/`) runs the same commands. It
+CI (`.github/workflows/ci.yml`) runs the same commands. It
 also runs pytest against pandas 3.0.6, because the production pandas layer version is not pinned in
 this repo. If your change touches the Lambdas, run that too:
 
