@@ -1,5 +1,6 @@
 import { convertToModelMessages, streamText, UIMessage } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { chatLimiter, checkRateLimit } from "@/lib/rate-limit";
@@ -54,7 +55,7 @@ export async function POST(req: Request) {
   const { messages }: { messages: UIMessage[] } = await req.json();
 
   const result = streamText({
-    model: bedrock("us.anthropic.claude-sonnet-4-6"),
+    model: bedrock(BEDROCK_MODEL_ID),
     system: SYSTEM,
     messages: await convertToModelMessages(messages),
   });

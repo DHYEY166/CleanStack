@@ -1,16 +1,8 @@
 import { query, queryOne } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { estimateBedrockCostUsd } from "@/lib/ai-config";
 
 const log = logger.child({ component: "bedrock-meter" });
-
-const PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
-  "us.anthropic.claude-sonnet-4-6": { inputPer1M: 3.0, outputPer1M: 15.0 },
-};
-
-function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
-  const p = PRICING[model] ?? { inputPer1M: 3.0, outputPer1M: 15.0 };
-  return (inputTokens / 1_000_000) * p.inputPer1M + (outputTokens / 1_000_000) * p.outputPer1M;
-}
 
 export async function meterBedrockCall(opts: {
   teamId: string;
@@ -22,7 +14,7 @@ export async function meterBedrockCall(opts: {
   const { teamId, runId, callType, model, usage } = opts;
   const inputTokens = usage.promptTokens ?? usage.inputTokens ?? 0;
   const outputTokens = usage.completionTokens ?? usage.outputTokens ?? 0;
-  const cost = estimateCost(model, inputTokens, outputTokens);
+  const cost = estimateBedrockCostUsd(model, inputTokens, outputTokens);
 
   // Fire-and-forget — never block the main flow
   query(

@@ -3,6 +3,7 @@ import { safeCompare } from "@/lib/secrets";
 import { generateText, type LanguageModelUsage } from "ai";
 
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
 import { meterBedrockCall } from "@/lib/bedrock-meter";
@@ -78,7 +79,7 @@ async function runConsultant(
 ): Promise<{ votes: VoteResult[]; usage: LanguageModelUsage }> {
   try {
     const result = await generateText({
-      model: bedrock("us.anthropic.claude-sonnet-4-6"),
+      model: bedrock(BEDROCK_MODEL_ID),
       system: systemPrompt,
       prompt: userPrompt,
       maxOutputTokens: 1500,
@@ -201,13 +202,12 @@ ${responseFormat}`,
 
   // Meter all 3 Bedrock calls
   if (pipelineRow?.team_id) {
-    const MODEL = "us.anthropic.claude-sonnet-4-6";
     [
       { r: auditorResult, type: "auto_validate_auditor" },
       { r: statResult, type: "auto_validate_stat" },
       { r: domainResult, type: "auto_validate_domain" },
     ].forEach(({ r, type }) =>
-      meterBedrockCall({ teamId: pipelineRow.team_id, runId, callType: type, model: MODEL, usage: r.usage })
+      meterBedrockCall({ teamId: pipelineRow.team_id, runId, callType: type, model: BEDROCK_MODEL_ID, usage: r.usage })
     );
   }
 

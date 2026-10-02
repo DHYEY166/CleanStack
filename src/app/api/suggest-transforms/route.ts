@@ -3,6 +3,7 @@ import { safeCompare } from "@/lib/secrets";
 import { generateText, Output } from "ai";
 
 import { bedrock } from "@ai-sdk/amazon-bedrock";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { checkQuota } from "@/lib/billing";
 import { clerkClient } from "@clerk/nextjs/server";
 import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
@@ -307,12 +308,12 @@ IMPORTANT RULES:
     let docOutput: { rules: Array<{ rule_type: string; column_name: null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
     try {
       const result = await generateText({
-        model: bedrock("us.anthropic.claude-sonnet-4-6"),
+        model: bedrock(BEDROCK_MODEL_ID),
         output: Output.object({ schema: documentOutputSchema }),
         prompt: docPrompt,
       });
       docOutput = result.output;
-      meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
+      meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: BEDROCK_MODEL_ID, usage: result.usage });
     } catch (aiErr) {
       log.error("Bedrock document suggestion failed", { run_id, err: aiErr });
       await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
@@ -650,12 +651,12 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   let output: { rules: Array<{ rule_type: string; column_name: string | null; parameters: Record<string, unknown>; ai_reasoning: string }> } | undefined;
   try {
     const result = await generateText({
-      model: bedrock("us.anthropic.claude-sonnet-4-6"),
+      model: bedrock(BEDROCK_MODEL_ID),
       output: Output.object({ schema: outputSchema }),
       prompt,
     });
     output = result.output;
-    meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: "us.anthropic.claude-sonnet-4-6", usage: result.usage });
+    meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: BEDROCK_MODEL_ID, usage: result.usage });
   } catch (aiErr) {
     log.error("Bedrock tabular suggestion failed", { run_id, err: aiErr });
     await queryOne(
