@@ -30,11 +30,10 @@ const log = logger.child({ component: "rate-limit" });
  * null = allowed, otherwise a 429 response.
  *
  * Never throws. If Upstash is unreachable (DNS failure, deleted database, bad
- * token, timeout) the request is allowed and the error is logged, the same
- * fail-open behaviour as when Redis is not configured. Before this, the error
- * escaped the route handler (e.g. "TypeError: fetch failed ... getaddrinfo"
- * from the Upstash REST client) and /api/upload answered 500 with an empty
- * body.
+ * token) the request is allowed and a warning is logged, the same fail-open
+ * behaviour as when Redis is not configured. Before this, the Upstash REST
+ * client's "TypeError: fetch failed ... getaddrinfo ENOTFOUND" escaped the
+ * route handler and /api/upload answered 500 with an empty body.
  */
 export async function checkRateLimit(
   limiter: Ratelimit | null,
@@ -45,7 +44,10 @@ export async function checkRateLimit(
   try {
     result = await limiter.limit(identifier);
   } catch (err) {
-    log.error("Upstash rate limiter unavailable; allowing request (check UPSTASH_REDIS_REST_URL/TOKEN)", { err });
+    // Fail open: an Upstash outage must not take uploads/AI routes down.
+    // Quota limits (the billing control) are enforced from Postgres, so the
+    // only thing lost while Redis is down is burst protection.
+    log.warn("Upstash rate limiter unavailable; allowing request (check UPSTASH_REDIS_REST_URL/TOKEN)", { err });
     return null;
   }
   const { success, limit, remaining, reset } = result;
