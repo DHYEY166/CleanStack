@@ -1,22 +1,10 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 
-// CSP: allows Clerk (accounts.dev + clerk.com CDN), Sentry ingest, and our own origin.
-// Note: 'unsafe-inline' required for Next.js inline scripts and Clerk. Nonce-based CSP
-// would remove this but needs middleware + per-request nonce injection — post-hackathon.
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://clerk.com https://*.clerk.accounts.dev https://js.sentry-cdn.com https://*.sentry.io",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
-  "img-src 'self' data: blob: https:",
-  "connect-src 'self' https://*.sentry.io https://*.ingest.sentry.io https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev https://sqs.us-east-1.amazonaws.com https://*.s3.amazonaws.com https://*.s3.us-east-1.amazonaws.com",
-  "frame-src 'none'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "upgrade-insecure-requests",
-].join("; ");
+import { buildCsp } from "./src/lib/csp";
+
+// See src/lib/csp.ts. Evaluated at build time.
+const CSP = buildCsp();
 
 const nextConfig: NextConfig = {
   async headers() {
