@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { TestAuthProvider } from "@/components/TestAuth";
+import { isTestMode } from "@/lib/test-mode";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -24,8 +26,10 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // TEST MODE ONLY: no Clerk keys in e2e, so no ClerkProvider (see src/lib/test-mode.ts).
+  const AuthProvider = isTestMode() ? TestAuthProvider : ClerkProvider;
   return (
-    <ClerkProvider>
+    <AuthProvider>
       <html
         lang="en"
         className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
@@ -34,6 +38,6 @@ export default function RootLayout({
           {children}
         </body>
       </html>
-    </ClerkProvider>
+    </AuthProvider>
   );
 }

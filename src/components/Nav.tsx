@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { CleanStackLogo } from "@/components/Logo";
+import { TestSignOutButton, useTestAuthEnabled } from "@/components/TestAuth";
 
 const navLinks = [
   { href: "/dashboard", label: "Dashboard" },
@@ -13,6 +14,7 @@ const navLinks = [
 
 export default function Nav() {
   const pathname = usePathname();
+  const testAuth = useTestAuthEnabled();
 
   return (
     <nav className="border-b border-gray-800 bg-gray-950 px-6 py-3 flex items-center justify-between">
@@ -36,7 +38,7 @@ export default function Nav() {
           ))}
         </div>
       </div>
-      <UserButton />
+      {testAuth ? <TestSignOutButton /> : <UserButton />}
     </nav>
   );
 }
