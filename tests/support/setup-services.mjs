@@ -24,7 +24,7 @@ const env = testEnv();
 Object.assign(process.env, env);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-async function retry(label, fn, attempts = 30) {
+async function retry(label, fn, attempts = 90) {
   for (let i = 1; ; i++) {
     try { return await fn(); } catch (e) {
       if (i >= attempts) throw new Error(`${label}: ${e.message}`);
