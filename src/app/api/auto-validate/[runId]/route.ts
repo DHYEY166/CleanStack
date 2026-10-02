@@ -30,7 +30,6 @@ const RISK_THRESHOLDS: Record<string, number> = {
   // Phase C LOW — additive/representation changes only
   split_column: 1,           // additive: creates new columns, source preserved
   column_header_normalize: 1, // rename only, data values unchanged
-  parquet_write: 1,          // output format change only
   bool_cast: 1,              // deterministic: maps known boolean strings only
   // MEDIUM — 2 of 3
   type_cast: 2,
