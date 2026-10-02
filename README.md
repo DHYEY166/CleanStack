@@ -84,7 +84,7 @@ AURORA_HOST=<cluster endpoint> RDS_CA_BUNDLE=/path/to/global-bundle.pem \
   node src/lib/migrations/run-migration.mjs
 ```
 
-This applies `schema.sql` and then every `src/lib/migrations/NNN_*.sql` in order. Every statement is idempotent, so re-running is safe. It authenticates with an RDS IAM token for `AURORA_USER` (default `postgres`). Optional seed data is in `src/lib/seed-templates.sql`.
+This applies `schema.sql` and then every `src/lib/migrations/NNN_*.sql` in order. Every statement is idempotent, so re-running is safe. It authenticates with an RDS IAM token for `AURORA_USER` (default `postgres`). For a plain Postgres (local or the test containers), set `DATABASE_URL` instead; it takes precedence and IAM auth is not used. Optional seed data is in `src/lib/seed-templates.sql`.
 
 ## Run the tests
 
@@ -105,6 +105,49 @@ python -m pytest -q lambdas/tests
 The Lambda tests import the real handlers. AWS clients are created but never called, and DB and S3 are faked inside the tests. CI runs them against both pandas 2.2.3 (pinned) and pandas 3.0.6.
 
 The workflow definition is `.github/workflows/ci.yml`. It runs on every pull request and on pushes to `main`.
+
+### Integration and end-to-end suites
+
+These run against real services in containers: Postgres 16 and LocalStack 3.8 (S3 + SQS). CI starts them as service containers in the `integration` and `e2e` jobs. Nothing calls real AWS or Bedrock.
+
+```bash
+# 1. Services (Docker). Or point DATABASE_URL / LOCALSTACK_URL at your own.
+docker compose -f tests/support/docker-compose.yml up -d --wait
+npm run services:setup        # schema + migrations, versioned buckets + CORS, queues, S3 -> SQS notification
+
+# 2. Integration: route handlers in-process + Lambda handlers in-process (Python)
+pip install -r lambdas/requirements-dev.txt     # the TS suite shells out to Python
+PYTHON=python npm run test:integration           # tests/integration (vitest.integration.config.mts)
+CLEANSTACK_INTEGRATION=1 python -m pytest -q lambdas/tests/integration
+
+# 3. Browser e2e: production build in test mode + Playwright
+npx playwright install --with-deps chromium
+npm run e2e:build                                # next build with the test env
+PYTHON=python npm run test:e2e                   # tests/e2e (playwright.config.ts)
+```
+
+| Suite | Command | What it covers |
+|---|---|---|
+| Integration (TS) | `npm run test:integration` | upload presigned PUT → S3 notification → profiler → suggest-transforms (fake model) → approve → executor SQS message → executor → presigned download fetch; account deletion purging every object version and delete marker; approve-rules claim under 8 concurrent requests; pg driver result shapes |
+| Integration (Python) | `CLEANSTACK_INTEGRATION=1 pytest lambdas/tests/integration` | executor idempotency with duplicate SQS deliveries (separate and same batch), retry and last-attempt semantics, profiler on a real S3 notification |
+| E2E | `npm run test:e2e` | sign in → upload a CSV → suggested rules → approve → completion → download with no `__orig_*` columns; the auth bypass is off without the flag and on Vercel |
+
+All environment for these suites lives in `tests/support/test-env.mjs`. Variables already set in your shell win. `pytest lambdas/tests` without `CLEANSTACK_INTEGRATION=1` skips the integration directory, so the unit suite never needs containers. With the variable set, missing services are an error, not a skip.
+
+**Lambdas in tests.** The real handlers run in-process (`tests/support/lambda_harness.py`). The only substitution is `get_db_conn()`, which in production builds an RDS IAM token and connects over TLS; in tests it is a plain connection to `DATABASE_URL`. The harness refuses to run unless `AWS_ENDPOINT_URL` points at LocalStack. In e2e, `tests/e2e/lambda_worker.py` stands in for the Lambda triggers: it feeds the S3 notification queue to the profiler and the executor queue to the executor, deleting a message only on success, like Lambda.
+
+### Test-only switches
+
+Everything test-only goes through `isTestMode()` in `src/lib/test-mode.ts`. It is true only when `CLEANSTACK_TEST_MODE=1` **and** none of `VERCEL`, `VERCEL_ENV`, `VERCEL_URL`, `AWS_LAMBDA_FUNCTION_NAME`, `AWS_EXECUTION_ENV` is set. Vercel sets `VERCEL=1` in every build and function, so a flag that leaks into a deployment is ignored, and `checkEnv()` logs it as an error at startup. `NODE_ENV=test` is not used because `next build` and `next start` always run with `NODE_ENV=production`.
+
+| Switch | Where | Effect in test mode | Guard / test |
+|---|---|---|---|
+| `DB_DRIVER=pg` + `DATABASE_URL` | `src/lib/db.ts`, `src/lib/db-pg.ts` | node-postgres instead of the RDS Data API, with Data API-shaped results | Throws `ConfigError` before connecting unless test mode (`db-pg.test.ts`) |
+| Cookie auth (`cs_test_user`) | `src/lib/auth.ts`, `src/middleware.ts`, `POST /api/test-auth`, sign-in page, root layout | Signs in `user_test_*` ids without Clerk (Clerk needs real keys) | Route 404s and cookie ignored outside test mode (`auth.test.ts`, `middleware.test.ts`, `test-auth/route.test.ts`); e2e `test-mode-guard.spec.ts` checks a build started without the flag and with flag + `VERCEL=1` |
+| Fake model | `src/lib/ai-model.ts`, `src/lib/fake-model.ts` | Deterministic `MockLanguageModelV3` instead of Bedrock | `fake-model.test.ts` asserts Bedrock without the flag and on Vercel |
+| LocalStack CSP | `src/lib/csp.ts` (build time) | `connect-src` allows `*.s3.localhost.localstack.cloud:4566`; drops `upgrade-insecure-requests` | `csp.test.ts` pins the production policy byte-for-byte without the flag and on Vercel |
+
+`@clerk/testing` was not used because its testing tokens still need a real Clerk development instance (publishable and secret keys), which CI does not have. The real Clerk sign-in is therefore not covered by e2e.
 
 ---
 
@@ -226,9 +269,9 @@ Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 - **Schema drift alerts** store their diff inside `column_definitions`, so the next alert reports a phantom `_diff` column.
 - **Templates** copy approved rules from all recent runs of a pipeline, not only the latest run.
 - **`middleware.ts`** uses the file convention that Next.js 16 deprecated in favour of `proxy.ts`. It still works; the rename is pending a test against real Clerk keys.
+- **Test coverage gaps.** The integration and e2e suites do not exercise the Lambdas' RDS IAM-token connection (`get_db_conn`), the RDS Data API itself (the web app uses the test-only pg driver), or the real Clerk sign-in.
 - **Parquet** is neither accepted for upload nor produced as output.
 - **Dev-only advisories.** `npm audit` reports 4 moderate advisories in drizzle-kit's bundled esbuild (dev dependency only).
-- **CI is defined but not enabled** until the workflow file is moved into `.github/workflows/`.
 
 ---
 
@@ -272,7 +315,10 @@ src/components/     React components
 src/lib/            db (Data API), env, logger, secrets, ai-config, s3-erase,
                     download/training-export helpers, schema.sql, migrations/
 lambdas/            profiler, executor, ai-trigger, drift handlers + tests/
-ci/                 verify.sh and the (not yet enabled) GitHub Actions workflow
+ci/                 verify.sh (the workflow is .github/workflows/ci.yml)
+tests/integration/  integration suite (vitest, real Postgres + LocalStack)
+tests/e2e/          Playwright specs + lambda_worker.py
+tests/support/      test env, service setup, docker-compose, Lambda harness
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md) for reporting issues.
