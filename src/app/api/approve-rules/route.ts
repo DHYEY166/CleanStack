@@ -49,8 +49,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Run is not awaiting approval" }, { status: 409 });
     }
 
-    // Wrap rule updates + audit insert + run status in a single transaction
+    const approved = rule_decisions.filter((d) => d.action === "approved").length;
+    const nextStatus = approved > 0 && process.env.SQS_QUEUE_URL ? "queued" : "completed";
+
+    // Wrap the status transition + rule updates + audit insert in one transaction.
+    // The conditional UPDATE is the concurrency guard: of two simultaneous
+    // approvals only one sees status = 'awaiting_approval', so a run can never
+    // be enqueued (and executed) twice from this route.
     const approvedCount = await withTransaction(async (txId) => {
+      const claimed = await queryOne<{ id: string }>(
+        `UPDATE pipeline_runs SET status = $2, updated_at = now()
+         WHERE id = $1 AND status = 'awaiting_approval'
+         RETURNING id`,
+        [run_id, nextStatus],
+        txId
+      );
+      if (!claimed) return null;
+
       for (const d of rule_decisions) {
         const params = d.modifications ? JSON.stringify(d.modifications) : null;
         await query(
@@ -73,19 +88,14 @@ export async function POST(req: NextRequest) {
         txId
       );
 
-      const count = rule_decisions.filter((d) => d.action === "approved").length;
-
-      // Set run status inside transaction — reconciler cron will retry SQS if send fails below
-      if (count > 0 && process.env.SQS_QUEUE_URL) {
-        await queryOne("UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1", [run_id], txId);
-      } else {
-        await queryOne("UPDATE pipeline_runs SET status = 'completed', updated_at = now() WHERE id = $1", [run_id], txId);
-      }
-
-      return count;
+      return approved;
     });
 
-    if (approvedCount > 0 && process.env.SQS_QUEUE_URL) {
+    if (approvedCount === null) {
+      return NextResponse.json({ error: "Run is not awaiting approval" }, { status: 409 });
+    }
+
+    if (nextStatus === "queued") {
       try {
         await sqs.send(
           new SendMessageCommand({
@@ -94,8 +104,10 @@ export async function POST(req: NextRequest) {
           })
         );
       } catch (sqsErr) {
-        // Status already 'queued' in DB — reconciler cron will retry SQS delivery
-        console.error("[approve-rules] SQS send failed (reconciler will retry):", sqsErr);
+        // The run stays 'queued' with no message. Nothing re-enqueues it: the
+        // reconcile-runs cron only marks stale runs 'failed' (see README "Known
+        // limitations"). An operator can re-send {"run_id": ...} to the queue.
+        console.error("[approve-rules] SQS send failed; run left queued without a message:", run_id, sqsErr);
       }
     }
 
