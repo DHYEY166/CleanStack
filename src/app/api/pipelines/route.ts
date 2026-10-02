@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   try {
     if (isGuestId(userId)) {
       const pipeline = await queryOne<Pipeline>(GUEST_PIPELINE_INSERT_SQL,
-        [name.trim(), description?.trim() || null, userId, GUEST_LIMITS.pipelinesPerGuest]);
+        [name.trim(), description?.trim() || null, userId, GUEST_LIMITS.pipelinesPerGuest, null]);
       if (!pipeline) {
         return NextResponse.json(
           { error: `Guests can create ${GUEST_LIMITS.pipelinesPerGuest} pipelines. Sign up to keep going.`, guest: true },
