@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import PipelineChat from "@/components/PipelineChat";
+import { readJson } from "@/lib/http";
 import {
   Upload,
   Sparkles,
@@ -73,8 +74,7 @@ export default function NewPipelinePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, description }),
       });
-      const { pipeline, error: pErr } = await pipelineRes.json();
-      if (pErr) throw new Error(pErr);
+      const { pipeline } = await readJson<{ pipeline: { id: string } }>(pipelineRes, "Create pipeline");
       setProgress(25);
 
       const uploadRes = await fetch("/api/upload", {
@@ -86,8 +86,7 @@ export default function NewPipelinePage() {
           content_type: file.type || "application/octet-stream",
         }),
       });
-      const { presigned_url, run_id, error: uErr } = await uploadRes.json();
-      if (uErr) throw new Error(uErr);
+      const { presigned_url, run_id } = await readJson<{ presigned_url: string; run_id: string }>(uploadRes, "Upload");
       setProgress(40);
 
       const uploadController = new AbortController();
@@ -99,7 +98,7 @@ export default function NewPipelinePage() {
           headers: { "Content-Type": file.type || "application/octet-stream" },
           signal: uploadController.signal,
         });
-        if (!s3Res.ok) throw new Error(`Upload failed — please retry`);
+        if (!s3Res.ok) throw new Error(`File upload to storage failed (HTTP ${s3Res.status}) — please retry`);
       } catch (fetchErr) {
         if (fetchErr instanceof DOMException && fetchErr.name === "AbortError") {
           throw new Error("Upload timed out — check your connection and retry");
@@ -114,8 +113,13 @@ export default function NewPipelinePage() {
       let attempts = 0;
       const poll = setInterval(async () => {
         attempts++;
-        const statusRes = await fetch(`/api/run-status/${run_id}`);
-        const { run } = await statusRes.json();
+        let run: { status?: string; error_message?: string } | undefined;
+        try {
+          ({ run } = await readJson<{ run?: { status?: string; error_message?: string } }>(
+            await fetch(`/api/run-status/${run_id}`), "Run status"));
+        } catch {
+          run = undefined; // transient; keep polling until the attempt limit
+        }
 
         if (run?.status === "awaiting_approval" || run?.status === "awaiting_ai") {
           clearInterval(poll);
