@@ -3,6 +3,7 @@ import { generateText, Output, streamText } from "ai";
 import { z } from "zod";
 import { createFakeModel, FAKE_MODEL_ID, FAKE_TEXT_REPLY, fakeTabularRules } from "@/lib/fake-model";
 import { languageModel } from "@/lib/ai-model";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 
 const tabularPrompt = `## COLUMN-BY-COLUMN PROFILE
 <user_data>
@@ -54,12 +55,12 @@ describe("languageModel()", () => {
 
   it("is Bedrock outside test mode", () => {
     delete process.env.CLEANSTACK_TEST_MODE;
-    expect(modelId()).toBe("us.anthropic.claude-sonnet-4-6");
+    expect(modelId()).toBe(BEDROCK_MODEL_ID);
   });
   it("is Bedrock when the test flag is set on Vercel", () => {
     process.env.CLEANSTACK_TEST_MODE = "1";
     process.env.VERCEL = "1";
-    expect(modelId()).toBe("us.anthropic.claude-sonnet-4-6");
+    expect(modelId()).toBe(BEDROCK_MODEL_ID);
   });
   it("is the fake in test mode", () => {
     process.env.CLEANSTACK_TEST_MODE = "1";
