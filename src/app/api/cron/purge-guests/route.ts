@@ -43,7 +43,7 @@ LIMIT $1`;
  * Erases expired guests: S3 objects (every version) and DB rows, through the
  * same helper as account deletion. bedrock_usage rows are kept for the AI
  * spend accounting. Call it hourly with Authorization: Bearer $CRON_SECRET
- * (README, Deployment). The S3 lifecycle rule on the guest_ prefix is the
+ * (docs/deployment.md). The S3 lifecycle rule on the guest_ prefix is the
  * backstop if this stops running.
  */
 export async function GET(req: Request) {

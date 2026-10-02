@@ -75,7 +75,7 @@ export async function eraseTeam(s3: S3Client, teamId: string, opts: { keepUsage?
     const unversioned = purges.filter((p) => !p.versioned).map((p) => p.prefix);
     if (unversioned.length) {
       // Missing s3:ListBucketVersions: only current versions were removed and
-      // older versions may survive on a versioned bucket (README, security model).
+      // older versions may survive on a versioned bucket (docs/security-model.md).
       log.error("ListObjectVersions denied; only current versions purged", { prefixes: unversioned });
     }
 

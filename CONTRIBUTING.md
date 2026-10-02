@@ -59,10 +59,42 @@ npx playwright install --with-deps chromium     # once
 npm run e2e:build && PYTHON=python npm run test:e2e
 ```
 
+CI runs 6 required checks: `web (node 20)`, `web (node 22)`, `lambdas (pandas 2.2.3)`,
+`lambdas (pandas 3.0.6)`, `integration (postgres + localstack)` and `e2e (playwright)`. `main`
+also requires the branch to be up to date before merging.
+
+| Suite | Covers |
+|---|---|
+| Integration (TS, `tests/integration`) | upload → S3 notification → profiler → suggest-transforms (fake model) → approve → executor → download; account deletion of every object version; concurrent approve-rules; guest sessions, quotas, AI budget, sample data and the purge cron |
+| Integration (Python, `lambdas/tests/integration`) | executor idempotency under duplicate SQS deliveries, retries, profiler on a real S3 notification |
+| E2E (Playwright, `tests/e2e`) | sign in → upload → approve → download with no `__orig_*` columns; the guest flow, its size limit, blocked features and upload cap; the auth bypass off without the flag and on Vercel; forged guest cookies |
+
+All environment for these suites is in `tests/support/test-env.mjs`. The real Lambda handlers run
+in-process (`tests/support/lambda_harness.py`), and only `get_db_conn()` is swapped for a plain
+connection to `DATABASE_URL`. In e2e, `tests/e2e/lambda_worker.py` stands in for the Lambda
+triggers. Without `CLEANSTACK_INTEGRATION=1`, `pytest lambdas/tests` skips the integration directory.
+
 On a CI e2e failure, download the `playwright-report` artifact. It has the HTML report and the
 traces; open a trace with `npx playwright show-trace test-results/<test>/trace.zip`.
 
-Rules for test-only code (see README, "Test-only switches"):
+### Test-only switches
+
+Everything test-only goes through `isTestMode()` in `src/lib/test-mode.ts`. It is true only when
+`CLEANSTACK_TEST_MODE=1` **and** none of `VERCEL`, `VERCEL_ENV`, `VERCEL_URL`,
+`AWS_LAMBDA_FUNCTION_NAME` or `AWS_EXECUTION_ENV` is set, so a leaked flag is ignored on Vercel and
+`checkEnv()` logs it as an error.
+
+| Switch | Effect in test mode | Guarded by |
+|---|---|---|
+| `DB_DRIVER=pg` + `DATABASE_URL` (`src/lib/db-pg.ts`) | node-postgres instead of the RDS Data API | `db-pg.test.ts` |
+| `cs_test_user` cookie (`src/lib/auth.ts`, `POST /api/test-auth`) | signs in `user_test_*` ids without Clerk | `auth.test.ts`, `middleware.test.ts`, e2e `test-mode-guard.spec.ts` |
+| Fake model (`src/lib/fake-model.ts`) | deterministic model instead of Bedrock | `fake-model.test.ts` |
+| LocalStack CSP (`src/lib/csp.ts`) | allows the LocalStack S3 origin | `csp.test.ts` pins the production policy |
+
+`@clerk/testing` is not used because it needs a real Clerk instance, so the real Clerk sign-in is
+not covered by e2e.
+
+Rules for test-only code:
 
 - Gate it with `isTestMode()` from `src/lib/test-mode.ts`, nothing else, and add a test that it
   is off without `CLEANSTACK_TEST_MODE=1` and when `VERCEL=1`.
@@ -95,7 +127,8 @@ Rules for test-only code (see README, "Test-only switches"):
 - **Secrets:** compare shared secrets with `safeCompare` from `src/lib/secrets.ts`.
 - **AI:** the Bedrock model id and prices live in `src/lib/ai-config.ts`. Do not hardcode them.
 - **Database:** schema changes go in a new idempotent `src/lib/migrations/NNN_<name>.sql`
-  (`IF NOT EXISTS`) **and** in `schema.sql`. Every query on tenant data must filter by `team_id`
+  (`IF NOT EXISTS`, no semicolons inside a statement) **and** in `schema.sql`, and the table in
+  `docs/deployment.md` gets a row. Every query on tenant data must filter by `team_id`
   (there is no RLS).
 - **Executor rules:** a new rule type must be added to the executor's `SUPPORTED_TABULAR_RULES`, the
   zod enum in `suggest-transforms`, and `RISK_THRESHOLDS` in `auto-validate`. `test_contracts.py`
@@ -103,3 +136,6 @@ Rules for test-only code (see README, "Test-only switches"):
 - **Profiler/executor quality code:** the `SHARED QUALITY BLOCK` is copied in both handlers and
   must stay identical (`test_quality.py`).
 - **Python dependencies** are exact-pinned in each `lambdas/*/requirements.txt`.
+- **Docs:** keep the README short. Deployment and AWS settings go in `docs/deployment.md`, the
+  runbook in `docs/operations.md`, security and guest limits in `docs/security-model.md`, and rule
+  types in `docs/transform-rules.md`.

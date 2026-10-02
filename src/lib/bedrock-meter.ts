@@ -79,7 +79,7 @@ export type AiBudget =
  *   bedrock_usage, so it holds without Upstash.
  *
  * Usage is recorded after a call, so concurrent requests can overshoot by the
- * cost of the calls in flight; see README "AI spend".
+ * cost of the calls in flight; see README "Known limitations".
  */
 export async function checkAiBudget(teamId: string, calls = 1): Promise<AiBudget> {
   if (!isGuestId(teamId)) {
