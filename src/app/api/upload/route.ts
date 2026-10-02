@@ -1,22 +1,26 @@
 import { auth, currentUserEmail } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { S3Client } from "@aws-sdk/client-s3";
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import { getCachedQuota } from "@/lib/quota-cache";
 import { uploadLimiter, checkRateLimit } from "@/lib/rate-limit";
 import type { PipelineRun } from "@/lib/types";
 import { requireEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { formatMb, maxUploadBytesFor } from "@/lib/upload-limits";
 
 const log = logger.child({ route: "POST /api/upload" });
 
-// Presigning only. Since SDK 3.729 the default (WHEN_SUPPORTED) bakes a CRC32 of the
-// *empty* body (x-amz-checksum-crc32=AAAAAA==) into presigned PutObject URLs, so the
-// browser's real upload does not match it (LocalStack rejects it with 400; see
-// aws/aws-sdk-js-v3#6810). WHEN_REQUIRED restores the pre-3.729 URL shape.
+// Presigning only. The upload is a presigned POST (not PUT) so the policy can carry
+// content-length-range: S3 itself rejects a body over the limit. WHEN_REQUIRED keeps
+// the SDK from adding checksum fields the browser's body would not match
+// (aws/aws-sdk-js-v3#6810).
 const s3 = new S3Client({ region: awsRegion(), requestChecksumCalculation: "WHEN_REQUIRED" });
+
+/** Presigned POST lifetime. */
+const UPLOAD_EXPIRES_SECONDS = 300;
 
 const ALLOWED_EXTENSIONS = new Set([
   "csv", "tsv", "txt", "json", "jsonl",
@@ -51,7 +55,11 @@ const STAGE_MESSAGES: Record<Stage, string> = {
 };
 
 /**
- * Creates a pending run and returns a presigned S3 PUT URL for the raw file.
+ * Creates a pending run and returns a presigned S3 POST (url + form fields) for
+ * the raw file. Body: { pipeline_id, filename, size } (size in bytes). A file
+ * over the caller's limit (src/lib/upload-limits.ts: 100 MB, guests 2 MB) is
+ * refused here with 413; the POST policy's content-length-range makes S3
+ * enforce the same limit on the actual bytes, and the profiler checks again.
  *
  * Every step runs inside one try/catch. Previously auth, rate limiting, the
  * Clerk email lookup and the quota query ran outside it, so any throw there
@@ -62,6 +70,13 @@ const STAGE_MESSAGES: Record<Stage, string> = {
  * that failed and are logged with the same `stage`, so Vercel runtime logs
  * show the underlying error.
  */
+/** The caller's per-file limit, so the upload form can refuse a large file before creating anything. */
+export async function GET() {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return NextResponse.json({ max_bytes: maxUploadBytesFor(userId) });
+}
+
 export async function POST(req: NextRequest) {
   let stage: Stage = "auth";
   try {
@@ -95,10 +110,20 @@ export async function POST(req: NextRequest) {
 
     stage = "parse_body";
     const body = await req.json().catch(() => null);
-    const { pipeline_id, filename } = (body ?? {}) as { pipeline_id?: string; filename?: string };
+    const { pipeline_id, filename, size } = (body ?? {}) as { pipeline_id?: string; filename?: string; size?: unknown };
 
     if (!pipeline_id || !filename) {
       return NextResponse.json({ error: "pipeline_id and filename required" }, { status: 400 });
+    }
+    const maxBytes = maxUploadBytesFor(userId);
+    if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) {
+      return NextResponse.json({ error: "size (file size in bytes) required" }, { status: 400 });
+    }
+    if (size > maxBytes) {
+      return NextResponse.json(
+        { error: `File is ${formatMb(size)}; the limit is ${formatMb(maxBytes)} per file.`, max_bytes: maxBytes },
+        { status: 413 }
+      );
     }
 
     const ext = filename.split(".").pop()?.toLowerCase() ?? "";
@@ -131,15 +156,18 @@ export async function POST(req: NextRequest) {
     if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
 
     stage = "presign";
-    const command = new PutObjectCommand({
+    const upload = await createPresignedPost(s3, {
       Bucket: requireEnv("S3_RAW_BUCKET"),
       Key: s3Key,
-      ContentType: content_type,
+      Conditions: [
+        ["content-length-range", 1, maxBytes],
+        ["eq", "$Content-Type", content_type],
+      ],
+      Fields: { "Content-Type": content_type },
+      Expires: UPLOAD_EXPIRES_SECONDS,
     });
 
-    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
-
-    return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
+    return NextResponse.json({ upload, max_bytes: maxBytes, run_id: run.id, s3_key: s3Key });
   } catch (err) {
     log.error("upload failed", { stage, err });
     return NextResponse.json(

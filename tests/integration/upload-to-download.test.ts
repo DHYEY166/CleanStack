@@ -1,6 +1,6 @@
 /**
  * The main pipeline end to end, server side, against real Postgres + LocalStack:
- * create pipeline -> /api/upload presigned PUT (real S3) -> S3 ObjectCreated
+ * create pipeline -> /api/upload presigned POST (real S3) -> S3 ObjectCreated
  * notification (real SQS) -> profiler handler -> profile-complete ->
  * suggest-transforms (fake model) -> /api/approve-rules -> executor SQS message
  * -> executor handler -> /api/run-status -> /api/download presigned GET fetch.
@@ -11,7 +11,7 @@ import type { Server } from "node:http";
 vi.mock("@/lib/auth", async () => (await import("./helpers")).authMock);
 
 import {
-  allVersions, authState, db, env, invokeLambda, newUser, purgeQueue, receive, request, sqsRecord, startAppServer,
+  allVersions, authState, db, env, invokeLambda, newUser, postUpload, purgeQueue, receive, request, sqsRecord, startAppServer,
 } from "./helpers";
 import { POST as createPipeline } from "@/app/api/pipelines/route";
 import { POST as upload } from "@/app/api/upload/route";
@@ -44,7 +44,7 @@ afterAll(async () => {
 });
 
 describe("upload -> profile -> suggest -> approve -> execute -> download", () => {
-  it("delivers a cleaned file without __orig_* columns through presigned URLs", async () => {
+  it("delivers a cleaned file without __orig_* columns through presigned POST/GET", async () => {
     const user = newUser();
     authState.userId = user;
 
@@ -53,14 +53,16 @@ describe("upload -> profile -> suggest -> approve -> execute -> download", () =>
     expect(pRes.status).toBe(201);
     const { pipeline } = await pRes.json();
 
-    const uRes = await upload(request("/api/upload", { method: "POST", body: { pipeline_id: pipeline.id, filename: "orders.csv", content_type: "text/csv" } }));
+    const uRes = await upload(request("/api/upload", { method: "POST", body: { pipeline_id: pipeline.id, filename: "orders.csv", size: CSV.length } }));
     expect(uRes.status).toBe(200);
-    const { presigned_url, run_id, s3_key } = await uRes.json();
-    expect(new URL(presigned_url).hostname).toBe(`${env("S3_RAW_BUCKET")}.s3.localhost.localstack.cloud`);
+    const { upload: post, run_id, s3_key, max_bytes } = await uRes.json();
+    expect(new URL(post.url).hostname).toBe(`${env("S3_RAW_BUCKET")}.s3.localhost.localstack.cloud`);
+    expect(post.fields.key).toBe(s3_key);
     expect(s3_key).toBe(`${user}/${pipeline.id}/${run_id}/raw.csv`);
+    expect(max_bytes).toBe(100 * 1024 * 1024);
 
-    const put = await fetch(presigned_url, { method: "PUT", body: CSV, headers: { "Content-Type": "text/csv" } });
-    expect(put.status).toBe(200);
+    const put = await postUpload(post, CSV, "orders.csv");
+    expect(put.status).toBe(204);
 
     // 2. S3 -> SQS notification drives the profiler, exactly like the Lambda trigger
     const [notification] = await receive(env("RAW_EVENTS_QUEUE_URL"), (m) => (m.Body ?? "").includes(run_id), 1, 0);

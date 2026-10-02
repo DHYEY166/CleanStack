@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Nav from "@/components/Nav";
 import PipelineChat from "@/components/PipelineChat";
 import { readJson } from "@/lib/http";
+import { formatMb } from "@/lib/upload-limits";
 import {
   Upload,
   Sparkles,
@@ -30,6 +31,7 @@ const FORMAT_LABELS: Record<string, string> = {
 };
 
 type Tab = "upload" | "chat";
+type PresignedPost = { url: string; fields: Record<string, string> };
 type Step = "form" | "uploading" | "processing";
 
 export default function NewPipelinePage() {
@@ -44,11 +46,25 @@ export default function NewPipelinePage() {
   const [step, setStep] = useState<Step>("form");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  // Per-file limit from GET /api/upload (100 MB by default, 2 MB for guests). The
+  // server and S3 enforce it regardless; this only saves a doomed upload.
+  const [maxBytes, setMaxBytes] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch("/api/upload")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { max_bytes?: number } | null) => { if (d?.max_bytes) setMaxBytes(d.max_bytes); })
+      .catch(() => {});
+  }, []);
 
   function handleFile(f: File) {
     const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
     if (!ACCEPTED_TYPES.includes(`.${ext}`)) {
       setError(`Unsupported file type: .${ext}`);
+      return;
+    }
+    if (maxBytes !== null && f.size > maxBytes) {
+      setError(`File is ${formatMb(f.size)}; the limit is ${formatMb(maxBytes)} per file.`);
       return;
     }
     setFile(f);
@@ -83,22 +99,25 @@ export default function NewPipelinePage() {
         body: JSON.stringify({
           pipeline_id: pipeline.id,
           filename: file.name,
-          content_type: file.type || "application/octet-stream",
+          size: file.size,
         }),
       });
-      const { presigned_url, run_id } = await readJson<{ presigned_url: string; run_id: string }>(uploadRes, "Upload");
+      const { upload, run_id } = await readJson<{ upload: PresignedPost; run_id: string }>(uploadRes, "Upload");
       setProgress(40);
 
       const uploadController = new AbortController();
       const uploadTimeout = setTimeout(() => uploadController.abort(), 120_000);
       try {
-        const s3Res = await fetch(presigned_url, {
-          method: "PUT",
-          body: file,
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          signal: uploadController.signal,
-        });
-        if (!s3Res.ok) throw new Error(`File upload to storage failed (HTTP ${s3Res.status}) — please retry`);
+        // Presigned POST: policy fields first, the file last (S3 ignores fields after it).
+        const form = new FormData();
+        for (const [k, v] of Object.entries(upload.fields)) form.append(k, v);
+        form.append("file", file);
+        const s3Res = await fetch(upload.url, { method: "POST", body: form, signal: uploadController.signal });
+        if (!s3Res.ok) {
+          const detail = await s3Res.text().catch(() => "");
+          if (/EntityTooLarge/.test(detail)) throw new Error("File is larger than your upload limit");
+          throw new Error(`File upload to storage failed (HTTP ${s3Res.status}) — please retry`);
+        }
       } catch (fetchErr) {
         if (fetchErr instanceof DOMException && fetchErr.name === "AbortError") {
           throw new Error("Upload timed out — check your connection and retry");
@@ -274,7 +293,7 @@ export default function NewPipelinePage() {
                       <FileUp className="h-5 w-5" aria-hidden="true" />
                     </div>
                     <div className="text-gray-200 font-medium mb-1">Drop file here or click to browse</div>
-                    <div className="text-gray-500 text-xs">Max 50MB</div>
+                    <div className="text-gray-500 text-xs">{maxBytes ? `Max ${formatMb(maxBytes)} per file` : "\u00a0"}</div>
                   </div>
                 )}
               </div>
