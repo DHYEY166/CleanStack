@@ -19,7 +19,7 @@ Only the `main` branch (what is deployed) receives fixes.
 
 ## Scope notes
 
-The [security model in the README](README.md#security-model) describes what the code enforces today,
+The [security model](docs/security-model.md) describes what the code enforces today,
 including known gaps. Reports in these areas are especially welcome:
 
 - **Tenant isolation.** It relies on `team_id` predicates in application queries. There is no

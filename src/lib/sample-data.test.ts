@@ -20,7 +20,7 @@ describe("sample data", () => {
   });
 
   it("every 003 statement is safe to send alone through the RDS Data API", () => {
-    // One statement per execute-statement call (README checklist): no semicolons inside statements.
+    // One statement per execute-statement call (docs/deployment.md, option B): no semicolons inside statements.
     const stmts = splitStatements(MIGRATION);
     expect(stmts.length).toBe(6);
     for (const s of stmts) expect(s).not.toContain(";");

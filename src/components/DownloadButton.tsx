@@ -209,7 +209,7 @@ export default function DownloadButton({
     try {
       const link = await getDownloadLink(runId);
       // Cross-origin fetch of the presigned URL: requires a CORS GET rule on
-      // the processed bucket for the app origin (see README, ops runbook).
+      // the processed bucket for the app origin (see docs/deployment.md).
       const res = await fetch(link.url);
       if (!res.ok) throw new Error(`Download failed (HTTP ${res.status})`);
       const buf = await res.arrayBuffer();
