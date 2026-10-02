@@ -24,6 +24,9 @@ import numpy as np
 
 DOCUMENT_EXTENSIONS = {"pdf", "docx"}
 
+# Audit columns holding pre-clean values. They live only in audit.csv, never in the deliverable.
+SIDECAR_PREFIX = "__orig_"
+
 def _is_text(series: pd.Series) -> bool:
     """True for string-like columns under both pandas 2 (object) and pandas 3 (str dtype)."""
     return series.dtype == object or isinstance(series.dtype, pd.StringDtype)
@@ -365,7 +368,7 @@ def load_raw_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
 
 def _strip_sidecar_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Remove __orig_* audit sidecar columns from re-ingested processed files."""
-    sidecar_cols = [c for c in df.columns if str(c).startswith("__orig_")]
+    sidecar_cols = [c for c in df.columns if str(c).startswith(SIDECAR_PREFIX)]
     if sidecar_cols:
         print(f"[executor] stripping {len(sidecar_cols)} __orig_* sidecar columns from re-ingested file")
         df = df.drop(columns=sidecar_cols)
@@ -387,7 +390,6 @@ def _to_numeric_clean(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
-SIDECAR_PREFIX = "__orig_"
 
 # Tabular rule types the executor implements. Anything else is reported as skipped.
 SUPPORTED_TABULAR_RULES = {
@@ -785,6 +787,22 @@ def apply_transforms(df: pd.DataFrame, rules: list[dict], results: list | None =
     return df
 
 
+def split_deliverable(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """Return (deliverable without __orig_* sidecars, audit frame or None if no sidecars).
+
+    The audit frame keeps every column, so each cleaned value sits next to its original.
+    """
+    sidecars = [c for c in df.columns if str(c).startswith(SIDECAR_PREFIX)]
+    if not sidecars:
+        return df, None
+    return df.drop(columns=sidecars), df
+
+
+def audit_key_for(processed_key: str) -> str:
+    """'processed/{pipeline}/{run}/output.json' -> 'processed/{pipeline}/{run}/audit.csv'."""
+    return processed_key.rsplit("/", 1)[0] + "/audit.csv"
+
+
 def compute_quality_profile(df: pd.DataFrame) -> dict:
     total_cells = df.size or 1
     total_rows = len(df)
@@ -1050,18 +1068,18 @@ def handler(event, context):
                     conn.commit()
                     return {"statusCode": 200, "run_id": run_id, "aborted": True}
 
-            # Write processed file in native format to S3
-            file_bytes, content_type, ext = save_dataframe(df, fmt)
+            # The deliverable never contains __orig_* sidecars; they go to a separate
+            # audit file next to it, so downloads can be served byte-for-byte from S3.
+            deliverable, audit = split_deliverable(df)
+            out_bytes, content_type, ext = save_dataframe(deliverable, fmt)
             processed_key = f"processed/{pipeline_id}/{run_id}/output.{ext}"
-            s3.put_object(
-                Bucket=processed_bucket,
-                Key=processed_key,
-                Body=file_bytes,
-                ContentType=content_type,
-            )
-            # Strip __orig_* sidecar columns before profiling — they inflate type_mismatch and trigger false drift alerts
-            df_for_profile = df[[c for c in df.columns if not str(c).startswith("__orig_")]]
-            profile = compute_quality_profile(df_for_profile)
+            s3.put_object(Bucket=processed_bucket, Key=processed_key, Body=out_bytes, ContentType=content_type)
+            if audit is not None:
+                audit_bytes, _, _ = save_dataframe(audit, "csv")
+                s3.put_object(Bucket=processed_bucket, Key=audit_key_for(processed_key),
+                              Body=audit_bytes, ContentType="text/csv")
+            df = deliverable
+            profile = compute_quality_profile(df)
 
         cur.execute(
             """INSERT INTO data_profiles
@@ -1112,8 +1130,7 @@ def handler(event, context):
             return {"statusCode": 200, "run_id": run_id}
 
         # Strip __orig_* sidecar columns before schema hash — sidecars must not trigger drift alerts
-        df_for_schema = df[[c for c in df.columns if not str(c).startswith("__orig_")]]
-        new_hash, col_defs = schema_hash(df_for_schema)
+        new_hash, col_defs = schema_hash(df)  # df is the sidecar-free deliverable
 
         cur.execute(
             """SELECT schema_hash FROM schema_snapshots
