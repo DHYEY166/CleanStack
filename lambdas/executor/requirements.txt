@@ -1,6 +1,10 @@
-openpyxl>=3.1.2
-lxml>=5.2.2
-psycopg2-binary>=2.9.9
-pymupdf>=1.24.0
-python-docx>=1.1.0
-sentry-sdk[aws-lambda]>=2.0.0
+# Exact pins, tested with Python 3.12 by lambdas/tests (see lambdas/requirements-dev.txt).
+# pandas/numpy are provided at runtime by the AWSSDKPandas-Python312 Lambda layer; the
+# versions the tests run against are pinned in lambdas/profiler/requirements.txt, and CI
+# also runs the suite against pandas 3 because newer layer versions ship pandas 3.
+openpyxl==3.1.5
+lxml==5.3.0
+psycopg2-binary==2.9.10
+pymupdf==1.24.14
+python-docx==1.1.2
+sentry-sdk[aws-lambda]==2.19.2

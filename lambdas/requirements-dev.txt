@@ -1,0 +1,8 @@
+# Local/CI test environment for all Lambdas (Python 3.12):
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r lambdas/requirements-dev.txt
+#   python -m pytest lambdas/tests
+-r profiler/requirements.txt
+-r executor/requirements.txt
+-r drift/requirements.txt
+pytest==8.3.4
