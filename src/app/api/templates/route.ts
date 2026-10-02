@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { forbidGuest } from "@/lib/guest-guard";
 import { query, queryOne } from "@/lib/db";
 import type { PipelineTemplate, TemplateRule } from "@/lib/types";
 
 export async function GET(req: NextRequest) {
+  const guestRes = forbidGuest((await auth()).userId);
+  if (guestRes) return guestRes;
+
   const { searchParams } = new URL(req.url);
   const category = searchParams.get("category");
 
@@ -21,6 +25,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
 
   const { pipeline_id, name, description, category } = await req.json();
   if (!pipeline_id || !name) {

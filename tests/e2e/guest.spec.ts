@@ -2,7 +2,8 @@
  * Guest access in a real browser (production build, test mode): POST /api/guest
  * sets the signed cs_guest cookie, the guest can open protected pages, sees a
  * 2 MB per-file limit, uploads through the presigned POST and reaches review.
- * Each test uses its own X-Forwarded-For so the per-IP cap never interferes.
+ * Guests are kept out of blocked features and capped at 3 uploads. Each test
+ * uses its own X-Forwarded-For so the per-IP caps never interfere.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import { randomUUID } from "node:crypto";
 const FIXTURE = join(__dirname, "fixtures", "orders.csv");
 
 async function startGuest(page: Page) {
-  const res = await page.request.post("/api/guest", { headers: { "x-forwarded-for": `192.0.2.${Math.floor(Math.random() * 250) + 1}` } });
+  const res = await page.request.post("/api/guest", { headers: { "x-forwarded-for": `e2e-${randomUUID()}` } });
   expect(res.status()).toBe(201);
   const cookie = (await page.context().cookies()).find((c) => c.name === "cs_guest");
   expect(cookie?.httpOnly).toBe(true);
@@ -54,4 +55,23 @@ test("a forged or tampered guest cookie is not a session", async ({ request }) =
     const res = await request.get("/api/usage", { headers: { cookie: `cs_guest=${value}` }, maxRedirects: 0 });
     expect(res.status()).toBe(401);
   }
+});
+
+test("guests are kept out of blocked features and capped at 3 uploads", async ({ page }) => {
+  await startGuest(page);
+  await page.goto("/templates");
+  await expect(page).toHaveURL(/\/dashboard\?guest_blocked=1$/);
+  for (const [method, path] of [["POST", "/api/chat-builder"], ["POST", "/api/chat-builder/generate-data"], ["GET", "/api/templates"],
+    ["POST", "/api/alerts/configure"], ["DELETE", "/api/account?confirm=true"], ["GET", "/api/export-training/00000000-0000-0000-0000-000000000000"]] as const) {
+    const res = await page.request.fetch(path, { method, data: method === "GET" ? undefined : {} });
+    expect(res.status(), `${method} ${path}`).toBe(403);
+    expect((await res.json()).guest).toBe(true);
+  }
+
+  const { pipeline } = await (await page.request.post("/api/pipelines", { data: { name: "guest caps" } })).json();
+  const start = () => page.request.post("/api/upload", { data: { pipeline_id: pipeline.id, filename: "a.csv", size: 100 } });
+  for (let i = 0; i < 3; i++) expect((await start()).status()).toBe(200);
+  const fourth = await start();
+  expect(fourth.status()).toBe(429);
+  expect((await fourth.json()).error).toBe("Guests can upload 3 files. Sign up to keep going.");
 });

@@ -5,11 +5,14 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import { getCachedQuota } from "@/lib/quota-cache";
+import { quotaBlockedMessage } from "@/lib/billing";
 import { uploadLimiter, checkRateLimit } from "@/lib/rate-limit";
 import type { PipelineRun } from "@/lib/types";
 import { requireEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { formatMb, maxUploadBytesFor } from "@/lib/upload-limits";
+import { isGuestId } from "@/lib/guest";
+import { guestUploadRefusal, insertGuestRun } from "@/lib/guest-quota";
 
 const log = logger.child({ route: "POST /api/upload" });
 
@@ -102,7 +105,7 @@ export async function POST(req: NextRequest) {
     if (quota.blocked) {
       return NextResponse.json(
         {
-          error: `Monthly row limit reached (${quota.used.toLocaleString()} / ${quota.includedRows.toLocaleString()} rows on ${quota.plan} plan). Upgrade at /pricing to continue.`,
+          error: quotaBlockedMessage(quota),
         },
         { status: 402 }
       );
@@ -146,12 +149,19 @@ export async function POST(req: NextRequest) {
     const runId = randomUUID();
     const s3Key = `${userId}/${pipeline_id}/${runId}/raw.${ext}`;
 
-    const run = await queryOne<PipelineRun>(
-      `INSERT INTO pipeline_runs (id, pipeline_id, status, file_format, raw_s3_key, started_at)
-       VALUES ($1, $2, 'pending', $3, $4, now())
-       RETURNING *`,
-      [runId, pipeline_id, ext, s3Key]
-    );
+    // Guests: the insert itself enforces the per-guest and per-IP upload caps.
+    const guest = isGuestId(userId);
+    const run = guest
+      ? await insertGuestRun({ runId, pipelineId: pipeline_id, fileFormat: ext, s3Key, guestId: userId })
+      : await queryOne<PipelineRun>(
+          `INSERT INTO pipeline_runs (id, pipeline_id, status, file_format, raw_s3_key, started_at)
+           VALUES ($1, $2, 'pending', $3, $4, now())
+           RETURNING *`,
+          [runId, pipeline_id, ext, s3Key]
+        );
+    if (!run && guest) {
+      return NextResponse.json({ error: await guestUploadRefusal(userId), guest: true }, { status: 429 });
+    }
 
     if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
 

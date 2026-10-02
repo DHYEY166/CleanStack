@@ -6,7 +6,7 @@ import { languageModel } from "@/lib/ai-model";
 import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
-import { meterBedrockCall } from "@/lib/bedrock-meter";
+import { checkAiBudget, meterBedrockCall } from "@/lib/bedrock-meter";
 import type { TransformRule, DataProfile } from "@/lib/types";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
@@ -169,6 +169,20 @@ Include a vote for every rule_id listed. No extra text.`;
     [runId]
   );
 
+  // AI budget for the 3 committee calls (src/lib/bedrock-meter.ts). Over budget,
+  // the run falls back to manual review instead of failing: the rules exist.
+  if (pipelineRow?.team_id) {
+    const budget = await checkAiBudget(pipelineRow.team_id, 3);
+    if (!budget.ok) {
+      log.warn("AI budget reached; auto-validate falls back to manual review", { run_id: runId, scope: budget.scope });
+      await queryOne(
+        "UPDATE pipeline_runs SET status = 'awaiting_approval', error_message = $2, updated_at = now() WHERE id = $1",
+        [runId, `Auto-review skipped: ${budget.error} Review the rules manually.`]
+      );
+      return NextResponse.json({ ok: true, fallback: "manual_review", scope: budget.scope });
+    }
+  }
+
   const [auditorResult, statResult, domainResult] = await Promise.all([
     runConsultant(
       "SafetyAuditor",
@@ -202,13 +216,13 @@ ${responseFormat}`,
 
   // Meter all 3 Bedrock calls
   if (pipelineRow?.team_id) {
-    [
+    await Promise.all([
       { r: auditorResult, type: "auto_validate_auditor" },
       { r: statResult, type: "auto_validate_stat" },
       { r: domainResult, type: "auto_validate_domain" },
-    ].forEach(({ r, type }) =>
+    ].map(({ r, type }) =>
       meterBedrockCall({ teamId: pipelineRow.team_id, runId, callType: type, model: BEDROCK_MODEL_ID, usage: r.usage })
-    );
+    ));
   }
 
   const [auditorVotes, statVotes, domainVotes] = [auditorResult.votes, statResult.votes, domainResult.votes];

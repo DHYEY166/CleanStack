@@ -238,6 +238,7 @@ aws lambda update-function-code --function-name cleanstack-executor \
 | Startup log `invalid or missing environment` | Set the listed variables in Vercel and redeploy. |
 | Rotating `WEBHOOK_SECRET` | Update the Vercel env **and** the profiler and ai-trigger Lambdas together. Requests fail with 401 while they differ. |
 | AI spend | `GET /api/admin/ai-spend` with `x-admin-secret` lists the current month's estimated spend per team. |
+| Guests see "Guest AI capacity is used up for today" | All guests together reached $5 of estimated Bedrock spend since 00:00 UTC. It resets at midnight UTC; the number is `GUEST_LIMITS.aiSpendAllGuestsPerDayUsd`. |
 
 ---
 
@@ -253,8 +254,22 @@ What the code does today. Settings that live only in AWS are listed as such.
   - After a successful execution, the executor deletes every object version under the run's raw prefix (`{user}/{pipeline}/{run}/`), including `extracted_text.txt` (`auto_delete_raw`, on by default).
   - Raw files of **failed** runs are not deleted, and there are no S3 lifecycle rules in the repo.
   - `DELETE /api/account?confirm=true` purges every version and delete marker under the user's raw prefix and their pipelines' processed prefixes, then deletes the DB rows. If S3 fails it aborts before touching the DB.
-- **AI.** Uploaded content is sent to Amazon Bedrock and wrapped in `<user_data>` tags with an instruction to treat it as data. This reduces prompt-injection risk but does not prevent it, which is why rules need approval (or the committee in auto mode). The monthly AI spend cap is checked in `suggest-transforms` only.
+- **AI.** Uploaded content is sent to Amazon Bedrock and wrapped in `<user_data>` tags with an instruction to treat it as data. This reduces prompt-injection risk but does not prevent it, which is why rules need approval (or the committee in auto mode). `checkAiBudget` (`src/lib/bedrock-meter.ts`) runs in Postgres before every Bedrock call (suggest-transforms on every pass, the auto-validate committee, chat-builder, generate-data), and every call is metered in `bedrock_usage`.
 - **Guest access** (`src/lib/guest.ts`, off unless `GUEST_COOKIE_SECRET` is set). `POST /api/guest` issues an httpOnly, `SameSite=Lax`, `Secure` cookie `cs_guest` = `guest_<22 chars>.<expiry>.<HMAC-SHA256>`, valid for 24 h; `auth()` returns that `guest_…` id as the user id (it is the `team_id`), and only when no Clerk user is signed in. Sessions are recorded in `guest_sessions` with an HMAC of the client IP (never the raw IP); at most 5 per IP and 200 overall per 24 h. Turnstile is checked when `TURNSTILE_SECRET_KEY` is set. Guest quotas and blocked features are listed in `src/lib/guest-limits.ts`.
+- **Guest limits** (all counted in Postgres, so they hold when Upstash is down):
+
+  | Limit | Value | Where |
+  |---|---|---|
+  | File size | 2 MB | presigned POST policy, `/api/upload` 413, profiler |
+  | Rows per run | 5,000 | `suggest-transforms`, before templates or AI; the run fails |
+  | Rows per guest | 10,000 (all passes; runs refused for size do not count) | `checkQuota` "guest" plan |
+  | Uploads | 3 per guest, 10 per IP hash per 24 h | the capped `INSERT` in `src/lib/guest-quota.ts` (also refuses expired sessions) |
+  | Pipelines | 5 per guest | `POST /api/pipelines` |
+  | AI calls | 10 per rolling hour | `checkAiBudget` |
+  | AI spend | $0.25 per guest; $5 per UTC day for all guests together | `checkAiBudget` |
+  | Sessions | 5 per IP hash and 200 overall per 24 h | `POST /api/guest` |
+
+  Guests cannot use the chat builder or synthetic data, auto-clean, training export, Slack alerts, account deletion, templates or `/api/admin`: the middleware answers 403 (or redirects `/templates` to the dashboard) and each route also refuses guest ids (`forbidGuest`). When auto-validate is over budget, the run falls back to manual review.
 - **Abuse limits.** Upstash sliding-window limits per user: 20 uploads/h, 50 AI calls/h, 30 chat messages/h. They fail open when Redis is not configured.
 - **Headers.** A CSP is set in `next.config.ts`. It allows `'unsafe-inline'` and `'unsafe-eval'` for scripts (needed by Next.js and Clerk without nonces).
 - **Secrets.** Nothing secret is committed. `.env.example` has placeholders only, and `run-migration.mjs` reads the database host from the environment. AWS account ids and ARNs from older commits remain in git history.
@@ -271,7 +286,7 @@ Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 - **No retention enforcement.** Raw files of failed runs stay in S3; `data_retention_days` is not enforced.
 - **Downloads are served as stored.** Deliverables produced before the sidecar split may still contain `__orig_*` columns. **Export As** and the training export strip them; the native download does not. Re-run those pipelines to regenerate them.
 - **Excel blanks are not counted as nulls** by the profiler (cells are read as empty strings). Before/after scores are still computed the same way.
-- **AI spend cap coverage.** The cap is checked before `suggest-transforms` only. Committee calls are metered but not blocked, and chat-builder calls are neither metered nor blocked.
+- **AI budget is checked before a call and recorded after it.** Concurrent requests can each pass the check and overshoot a cap by the cost of the calls in flight (the committee's 3 calls are reserved together). Costs are estimates from `src/lib/ai-config.ts`, not the AWS bill.
 - **Upload size limit is per file only.** 100 MB (`MAX_UPLOAD_MB`) for users, 2 MB for guests. A file under the limit can still exhaust the executor Lambda's memory or time for expensive rules. `semantic_deduplicate` (MinHash + LSH, a few seconds for 50k short texts) is skipped with a reason instead of running past the Lambda deadline, and above `SEMANTIC_DEDUP_MAX_ROWS` rows; other rules have no such guard.
 - **Schema drift alerts** store their diff inside `column_definitions`, so the next alert reports a phantom `_diff` column.
 - **Templates** copy approved rules from all recent runs of a pipeline, not only the latest run.

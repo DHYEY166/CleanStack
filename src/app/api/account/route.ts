@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { forbidGuest } from "@/lib/guest-guard";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client } from "@aws-sdk/client-s3";
 import { query, queryOne, withTransaction } from "@/lib/db";
@@ -29,6 +30,8 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 export async function DELETE(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
 
   // Require explicit confirmation to prevent accidental or CSRF-triggered deletion
   const confirm = req.nextUrl.searchParams.get("confirm");

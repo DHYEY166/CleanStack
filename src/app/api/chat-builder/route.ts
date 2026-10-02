@@ -3,6 +3,9 @@ import { languageModel } from "@/lib/ai-model";
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { chatLimiter, checkRateLimit } from "@/lib/rate-limit";
+import { forbidGuest } from "@/lib/guest-guard";
+import { checkAiBudget, meterBedrockCall } from "@/lib/bedrock-meter";
+import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
 
 export const maxDuration = 60;
 
@@ -48,8 +51,15 @@ export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const guestRes = forbidGuest(userId);
+  if (guestRes) return guestRes;
+
   const rateLimitRes = await checkRateLimit(chatLimiter, userId);
   if (rateLimitRes) return rateLimitRes;
+
+  // Monthly AI spend cap, and meter the call when the stream finishes.
+  const budget = await checkAiBudget(userId);
+  if (!budget.ok) return NextResponse.json({ error: budget.error }, { status: budget.status });
 
   const { messages }: { messages: UIMessage[] } = await req.json();
 
@@ -57,6 +67,8 @@ export async function POST(req: Request) {
     model: languageModel(),
     system: SYSTEM,
     messages: await convertToModelMessages(messages),
+    onFinish: ({ totalUsage }) =>
+      meterBedrockCall({ teamId: userId, runId: null, callType: "chat_builder", model: BEDROCK_MODEL_ID, usage: totalUsage }),
   });
 
   return result.toUIMessageStreamResponse();

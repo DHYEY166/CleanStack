@@ -31,3 +31,28 @@ export const GUEST_LIMITS = {
   /** New guest sessions per 24 h, all IPs. */
   guestsPerDay: 200,
 } as const;
+
+/**
+ * Features a guest cannot use: they cost money with no row/AI accounting
+ * (chat builder, synthetic data, auto-clean's unattended passes), send data
+ * elsewhere (Slack alerts, training export), are irreversible account actions
+ * (deletion; a guest session simply expires), or are shared/admin surfaces
+ * (templates, /api/admin). The middleware answers 403 (API) or redirects
+ * (pages) for these, and each route also refuses guest ids (forbidGuest).
+ */
+export const GUEST_BLOCKED_PATHS: readonly RegExp[] = [
+  /^\/api\/chat-builder(\/|$)/,
+  /^\/api\/runs\/[^/]+\/auto-clean\/?$/,
+  /^\/api\/export-training(\/|$)/,
+  /^\/api\/alerts(\/|$)/,
+  /^\/api\/account(\/|$)/,
+  /^\/api\/templates(\/|$)/,
+  /^\/api\/admin(\/|$)/,
+  /^\/templates(\/|$)/,
+];
+
+export function isGuestBlockedPath(pathname: string): boolean {
+  return GUEST_BLOCKED_PATHS.some((re) => re.test(pathname));
+}
+
+export const GUEST_BLOCKED_MESSAGE = "This feature is not available in guest mode. Sign up to use it.";

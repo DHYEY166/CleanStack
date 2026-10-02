@@ -20,3 +20,8 @@ CREATE INDEX IF NOT EXISTS idx_guest_sessions_created
 
 CREATE INDEX IF NOT EXISTS idx_guest_sessions_expires
   ON guest_sessions (expires_at);
+
+-- checkAiBudget (src/lib/bedrock-meter.ts) sums today's spend of all guests
+-- (team_id LIKE 'guest\_%' AND created_at >= today) before every guest AI call.
+CREATE INDEX IF NOT EXISTS idx_bedrock_usage_created
+  ON bedrock_usage (created_at);

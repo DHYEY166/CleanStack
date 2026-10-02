@@ -1,4 +1,6 @@
 import { queryOne } from "@/lib/db";
+import { isGuestId } from "@/lib/guest";
+import { GUEST_LIMITS } from "@/lib/guest-limits";
 
 export const PLANS = {
   free: { name: "Free",  includedRows: 50_000,      overagePer100k: null, hardCap: true  },
@@ -22,7 +24,7 @@ export interface Subscription {
 }
 
 export interface QuotaResult {
-  plan: PlanId | "admin";
+  plan: PlanId | "admin" | "guest";
   includedRows: number;
   used: number;
   remaining: number;
@@ -46,6 +48,7 @@ const ADMIN_USER_IDS = new Set(
 );
 
 export function isAdmin(email: string | null | undefined, userId?: string | null): boolean {
+  if (userId && isGuestId(userId)) return false;
   if (userId && ADMIN_USER_IDS.has(userId)) return true;
   return !!email && ADMIN_EMAILS.has(email.toLowerCase());
 }
@@ -75,6 +78,22 @@ export async function getMonthlyUsage(teamId: string): Promise<number> {
   return Number(result?.total ?? 0);
 }
 
+/**
+ * Rows a guest has used, all time (a guest lives 24 h), every pass. Runs over
+ * GUEST_LIMITS.rowsPerRun are refused before any AI call, so they do not count.
+ */
+export async function getGuestUsage(guestId: string): Promise<number> {
+  const result = await queryOne<{ total: string }>(
+    `SELECT COALESCE(SUM(pr.row_count_raw), 0) AS total
+     FROM pipeline_runs pr
+     JOIN pipelines p ON pr.pipeline_id = p.id
+     WHERE p.team_id = $1
+       AND pr.row_count_raw <= $2`,
+    [guestId, GUEST_LIMITS.rowsPerRun]
+  );
+  return Number(result?.total ?? 0);
+}
+
 export async function checkQuota(
   teamId: string,
   email?: string | null,
@@ -89,6 +108,20 @@ export async function checkQuota(
       hardCap: false,
       blocked: false,
       isAdmin: true,
+    };
+  }
+
+  if (isGuestId(teamId)) {
+    const used = await getGuestUsage(teamId);
+    const included = GUEST_LIMITS.rowsPerGuest;
+    return {
+      plan: "guest",
+      includedRows: included,
+      used,
+      remaining: Math.max(0, included - used),
+      hardCap: true,
+      blocked: used >= included,
+      isAdmin: false,
     };
   }
 
@@ -109,4 +142,12 @@ export async function checkQuota(
     blocked,
     isAdmin: false,
   };
+}
+
+/** The message shown when quota.blocked. */
+export function quotaBlockedMessage(quota: QuotaResult): string {
+  const counts = `${quota.used.toLocaleString("en-US")} / ${quota.includedRows.toLocaleString("en-US")} rows`;
+  return quota.plan === "guest"
+    ? `Guest row limit reached (${counts}). Sign up to keep going.`
+    : `Monthly row limit reached (${counts} on ${quota.plan} plan). Upgrade at /pricing to continue.`;
 }

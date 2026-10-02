@@ -8,6 +8,12 @@ const h = vi.hoisted(() => ({
   queryOneWithTeam: vi.fn(),
   queryOne: vi.fn(),
   createPresignedPost: vi.fn(),
+  insertGuestRun: vi.fn(),
+  guestUploadRefusal: vi.fn(),
+}));
+vi.mock("@/lib/guest-quota", () => ({
+  insertGuestRun: (...a: unknown[]) => h.insertGuestRun(...a),
+  guestUploadRefusal: (...a: unknown[]) => h.guestUploadRefusal(...a),
 }));
 
 vi.mock("@/lib/auth", () => ({ auth: () => h.auth(), currentUserEmail: () => h.email() }));
@@ -70,11 +76,24 @@ describe("POST /api/upload", () => {
     });
   });
 
-  it("guests get a 2 MB policy", async () => {
+  it("guests get a 2 MB policy, and their run is created by the capped insert", async () => {
     h.auth.mockResolvedValue({ userId: "guest_" + "a".repeat(22) });
+    h.insertGuestRun.mockResolvedValue({ id: "run_g" });
     const res = await call();
     expect(res.status).toBe(200);
+    expect(h.queryOne).not.toHaveBeenCalled();
+    expect(h.insertGuestRun.mock.calls[0][0]).toMatchObject({ guestId: "guest_" + "a".repeat(22), fileFormat: "csv" });
     expect(h.createPresignedPost.mock.calls[0][1].Conditions[0]).toEqual(["content-length-range", 1, 2 * 1024 * 1024]);
+  });
+
+  it("answers 429 with the reason when a guest is over the upload caps, without presigning", async () => {
+    h.auth.mockResolvedValue({ userId: "guest_" + "a".repeat(22) });
+    h.insertGuestRun.mockResolvedValue(null);
+    h.guestUploadRefusal.mockResolvedValue("Guests can upload 3 files. Sign up to keep going.");
+    const res = await call();
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "Guests can upload 3 files. Sign up to keep going.", guest: true });
+    expect(h.createPresignedPost).not.toHaveBeenCalled();
   });
 
   it("refuses a declared size over the limit with 413 before creating a run", async () => {
