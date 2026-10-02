@@ -141,6 +141,8 @@ CREATE TABLE IF NOT EXISTS bedrock_usage (
 
 CREATE INDEX IF NOT EXISTS idx_bedrock_usage_team_created
   ON bedrock_usage (team_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_bedrock_usage_created
+  ON bedrock_usage (created_at);
 
 CREATE TABLE IF NOT EXISTS ai_spend_limits (
   team_id TEXT PRIMARY KEY,

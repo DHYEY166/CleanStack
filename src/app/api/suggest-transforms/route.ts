@@ -4,9 +4,11 @@ import { generateText, Output } from "ai";
 
 import { languageModel } from "@/lib/ai-model";
 import { BEDROCK_MODEL_ID } from "@/lib/ai-config";
-import { checkQuota } from "@/lib/billing";
+import { checkQuota, quotaBlockedMessage } from "@/lib/billing";
 import { userEmailById } from "@/lib/auth";
-import { meterBedrockCall, checkAiSpendCap } from "@/lib/bedrock-meter";
+import { meterBedrockCall, checkAiBudget } from "@/lib/bedrock-meter";
+import { isGuestId } from "@/lib/guest";
+import { GUEST_LIMITS } from "@/lib/guest-limits";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 300;
@@ -112,8 +114,20 @@ export async function POST(req: NextRequest) {
     return rateLimitRes;
   }
 
-  // AI-spend guard for pass 1 only — prevent Bedrock cost if Free-tier quota exceeded
-  if ((run.iteration ?? 1) === 1) {
+  const guest = isGuestId(run.team_id);
+  const failRun = (message: string) =>
+    queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1", [run_id, message]);
+
+  // Guests: one file may have at most GUEST_LIMITS.rowsPerRun rows (checked
+  // before templates and AI, so an oversized file costs nothing).
+  if (guest && Number(run.row_count_raw ?? 0) > GUEST_LIMITS.rowsPerRun) {
+    await failRun(`Guest runs are limited to ${GUEST_LIMITS.rowsPerRun.toLocaleString()} rows; this file has ${Number(run.row_count_raw).toLocaleString()}. Sign up to clean larger files.`);
+    return NextResponse.json({ error: "Guest row limit exceeded" }, { status: 402 });
+  }
+
+  // Row quota: pass 1 for users (later passes re-read the same rows); every pass
+  // for guests, whose allowance is all-time.
+  if ((run.iteration ?? 1) === 1 || guest) {
     const pipelineRow = await queryOne<{ team_id: string }>(
       "SELECT team_id FROM pipelines WHERE id = $1",
       [run.pipeline_id]
@@ -124,16 +138,9 @@ export async function POST(req: NextRequest) {
       if (quota.blocked) {
         await queryOne(
           "UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
-          [run_id, `Monthly row limit reached (${quota.used.toLocaleString()} / ${quota.includedRows.toLocaleString()} rows on ${quota.plan} plan). Upgrade to continue.`]
+          [run_id, quotaBlockedMessage(quota)]
         );
         return NextResponse.json({ error: "Quota exceeded" }, { status: 402 });
-      }
-      // AI spend cap check
-      const aiSpend = await checkAiSpendCap(pipelineRow.team_id);
-      if (aiSpend.blocked) {
-        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
-          [run_id, `AI spend cap reached ($${aiSpend.currentSpendUsd.toFixed(2)} / $${aiSpend.hardCapUsd} this month). Contact support.`]);
-        return NextResponse.json({ error: "AI spend cap exceeded" }, { status: 402 });
       }
     }
   }
@@ -183,6 +190,15 @@ export async function POST(req: NextRequest) {
   );
   if (!profile) {
     return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+  }
+
+  // AI budget before the Bedrock call, every pass (src/lib/bedrock-meter.ts):
+  // the monthly hard cap for users; hourly calls, per-guest and all-guests
+  // daily spend for guests. Template runs above never reach Bedrock.
+  const budget = await checkAiBudget(run.team_id);
+  if (!budget.ok) {
+    await failRun(budget.error);
+    return NextResponse.json({ error: budget.error, scope: budget.scope }, { status: budget.status });
   }
 
   // Document mode — separate prompt + schema
@@ -311,7 +327,7 @@ IMPORTANT RULES:
         prompt: docPrompt,
       });
       docOutput = result.output;
-      meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: BEDROCK_MODEL_ID, usage: result.usage });
+      await meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms_doc", model: BEDROCK_MODEL_ID, usage: result.usage });
     } catch (aiErr) {
       log.error("Bedrock document suggestion failed", { run_id, err: aiErr });
       await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
@@ -654,7 +670,7 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
       prompt,
     });
     output = result.output;
-    meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: BEDROCK_MODEL_ID, usage: result.usage });
+    await meterBedrockCall({ teamId: run.team_id, runId: run_id, callType: "suggest_transforms", model: BEDROCK_MODEL_ID, usage: result.usage });
   } catch (aiErr) {
     log.error("Bedrock tabular suggestion failed", { run_id, err: aiErr });
     await queryOne(
