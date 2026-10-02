@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { safeCompare } from "@/lib/secrets";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { queryOne } from "@/lib/db";
-
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 
 // When AI_QUEUE_ENABLED=true: enqueue to SQS → return 200 immediately (profiler doesn't wait)
 // When AI_QUEUE_ENABLED=false: direct HTTP call to suggest-transforms (original behavior)

@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { safeCompare } from "@/lib/secrets";
 import { query } from "@/lib/db";
-
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 
 export const maxDuration = 30;
 

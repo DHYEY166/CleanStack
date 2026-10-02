@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { safeCompare } from "@/lib/secrets";
 import { generateText, type LanguageModelUsage } from "ai";
 
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
