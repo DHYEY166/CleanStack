@@ -3,15 +3,15 @@
 ## Reporting a vulnerability
 
 Please **do not open a public issue** for security problems. Report them privately through GitHub's
-[private vulnerability reporting](https://github.com/DHYEY166/CleanStack/security/advisories/new),
-or email the maintainer at dhyeydes@usc.edu, with:
+[private vulnerability reporting](https://github.com/DHYEY166/CleanStack/security/advisories/new)
+(the repository's **Security** tab), including:
 
 - what is affected (route, Lambda, file) and how to reproduce it,
 - the impact you expect (data exposure, privilege, cost),
 - any logs or proof of concept, **with real customer data removed**.
 
-You should get an acknowledgement within 5 business days. Please give us a reasonable time to fix
-the issue before you disclose it.
+Please give the maintainer a reasonable amount of time to fix the issue before you disclose it
+publicly.
 
 ## Supported versions
 
