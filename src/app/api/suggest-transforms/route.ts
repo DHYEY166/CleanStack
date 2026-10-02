@@ -38,7 +38,6 @@ const ruleSchema = z.object({
     "multi_currency_strip",
     "filter_extended",
     "split_column",
-    "parquet_write",
     "column_header_normalize",
   ]),
   column_name: z.string().nullable(),

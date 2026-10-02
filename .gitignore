@@ -73,3 +73,8 @@ credentials.json
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# python tooling
+.pytest_cache/
+.venv/
+__pycache__/

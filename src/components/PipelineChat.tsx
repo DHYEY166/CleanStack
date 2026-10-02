@@ -124,7 +124,7 @@ export default function PipelineChat({ onApply }: PipelineChatProps) {
         {messages.length === 0 && (
           <div className="space-y-3">
             <p className="text-gray-400 text-sm">
-              Describe your data and I'll suggest a pipeline configuration.
+              Describe your data and I&apos;ll suggest a pipeline configuration.
             </p>
             <div className="grid grid-cols-1 gap-2">
               {STARTERS.map((s) => (

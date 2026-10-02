@@ -16,12 +16,278 @@ import json
 import io
 import re
 import hashlib
+import math
 import boto3
 import psycopg2
 import pandas as pd
 import numpy as np
 
 DOCUMENT_EXTENSIONS = {"pdf", "docx"}
+
+# Audit columns holding pre-clean values. They live only in audit.csv, never in the deliverable.
+SIDECAR_PREFIX = "__orig_"
+
+# === BEGIN SHARED QUALITY BLOCK ===
+# This block is kept identical in lambdas/profiler/handler.py and lambdas/executor/handler.py so raw and
+# processed quality scores use the same loader and formula (review M1). Each Lambda is
+# deployed as a standalone zip, so it is copied rather than imported.
+# lambdas/tests/test_quality.py fails if the two copies diverge.
+
+SENTINEL_VALUES = {
+    # Explicit null markers
+    "", "n/a", "na", "null", "none", "unknown", "undefined", "not available",
+    "not applicable", "not provided", "not specified", "not given",
+    # Punctuation sentinels
+    "-", "--", "---", "----", ".", "..", "...",
+    "?", "??", "???", "#", "##",
+    # Coded sentinels — unambiguous null-proxy numbers only
+    "00", "000", "99", "999", "9999", "99999", "-99", "-999",
+    # Boolean-as-sentinel (nil/nan/missing/void are unambiguous; "false" and "0" are valid data)
+    "nil", "nan", "missing", "void",
+    # State sentinels (excludes "pending" — valid status value in workflow/ticket/order datasets)
+    "n.a.", "n.a", "#n/a", "#null!", "tbd", "tbc", "not set",
+    "to be determined", "to be confirmed", "unknown value",
+    # Excel/CSV export artifacts — always invalid in real data
+    "#value!", "#ref!", "#div/0!", "#name?", "#num!", "#error!",
+    "error", "err", "null value", "blank", "empty",
+    # Numeric as string — inf/-inf are unambiguous; 0/0.0/-1 removed (valid in real data)
+    "inf", "-inf",
+}
+
+def _is_text(series: pd.Series) -> bool:
+    """True for string-like columns under both pandas 2 (object) and pandas 3 (str dtype)."""
+    return series.dtype == object or isinstance(series.dtype, pd.StringDtype)
+
+
+def _text_cols(df: pd.DataFrame) -> list:
+    """All string-like columns (pandas 2 object and pandas 3 str dtypes)."""
+    return [c for c in df.columns if _is_text(df[c])]
+
+
+def _dtype_name(series: pd.Series) -> str:
+    """Stable dtype label across pandas versions (pandas 3 reports text columns as "str")."""
+    return "object" if _is_text(series) else str(series.dtype)
+
+
+def detect_encoding(file_bytes: bytes) -> str:
+    try:
+        import chardet
+        result = chardet.detect(file_bytes[:8192])
+        enc = result.get("encoding") or "utf-8"
+        confidence = result.get("confidence", 0.0)
+        return enc if confidence > 0.7 else "utf-8"
+    except ImportError:
+        return "utf-8"
+
+
+def _val_pattern(val: str) -> str:
+    s = re.sub(r'[A-Za-z]+', 'A', val)
+    s = re.sub(r'\d+', 'N', s)
+    return s
+
+
+def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
+    buf = io.BytesIO(file_bytes)
+
+    if fmt == "csv":
+        encoding = detect_encoding(file_bytes)
+        sample = file_bytes[:4096].decode(encoding, errors="replace")
+        sep = "\t" if sample.count("\t") > sample.count(",") else ","
+        return pd.read_csv(
+            io.BytesIO(file_bytes), sep=sep,
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt == "txt":
+        encoding = detect_encoding(file_bytes)
+        sample = file_bytes[:4096].decode(encoding, errors="replace")
+        counts = {s: sample.count(s) for s in [",", "\t", "|", ";"]}
+        sep = max(counts, key=counts.get)
+        if counts[sep] < 2:
+            return pd.read_csv(
+                io.BytesIO(file_bytes), sep=r'\s+',
+                dtype=str, keep_default_na=False, engine='python',
+                encoding=encoding, encoding_errors="replace",
+            )
+        return pd.read_csv(
+            io.BytesIO(file_bytes), sep=sep,
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt == "tsv":
+        encoding = detect_encoding(file_bytes)
+        return pd.read_csv(
+            buf, sep="\t",
+            dtype=str, keep_default_na=False, low_memory=False,
+            encoding=encoding, encoding_errors="replace",
+        )
+    elif fmt in ("json", "jsonl"):
+        text = file_bytes.decode("utf-8", errors="replace").strip()
+        if fmt == "jsonl":
+            # Strip comment lines before parsing
+            lines = [l for l in text.splitlines() if not l.strip().startswith("//")]
+            text_clean = "\n".join(lines)
+            try:
+                return pd.read_json(io.BytesIO(text_clean.encode()), lines=True)
+            except Exception:
+                pass
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return pd.json_normalize(parsed)
+            elif isinstance(parsed, dict):
+                for v in parsed.values():
+                    if isinstance(v, list):
+                        return pd.json_normalize(v)
+                return pd.json_normalize([parsed])
+        except Exception:
+            pass
+        try:
+            return pd.read_json(io.BytesIO(file_bytes), lines=True)
+        except Exception:
+            return pd.read_json(io.BytesIO(file_bytes))
+    elif fmt in ("xlsx", "xls"):
+        xl = pd.ExcelFile(buf)
+        df = xl.parse(xl.sheet_names[0], dtype=str, keep_default_na=False)
+        # Forward-fill merged cells (NaN after merge top-left = merged cell artifact)
+        df = df.ffill(axis=0)
+        return df
+    elif fmt == "xml":
+        from lxml import etree
+        root = etree.fromstring(file_bytes)
+        rows = [{child.tag: child.text for child in elem} for elem in root]
+        if not rows:
+            rows = [{root.tag: root.text}]
+        return pd.DataFrame(rows)
+    else:
+        raise ValueError(f"Unsupported format: {fmt}")
+
+
+def compute_quality_score(df: pd.DataFrame) -> dict:
+    total_cells = df.size or 1
+    total_rows  = len(df)
+    total_cols  = len(df.columns)
+
+    null_count = df.isnull().sum().sum()
+    null_pct   = round(null_count / total_cells * 100, 2)
+
+    dup_count = df.duplicated().sum()
+    dup_pct   = round(dup_count / max(total_rows, 1) * 100, 2)
+
+    # keep_default_na=False: empty cells are "" not NaN — exclude them before type-mismatch check
+    type_mismatches = 0
+    for col in df.columns:
+        if _is_text(df[col]):
+            non_empty = df[col][df[col].astype(str).str.strip() != ""]
+            numeric_count = pd.to_numeric(non_empty, errors="coerce").notna().sum()
+            if 0 < numeric_count < len(non_empty):
+                type_mismatches += 1
+
+    # dtype=str: coerce object cols to numeric before outlier detection
+    outlier_count = 0
+    for col in df.columns:
+        _num = pd.to_numeric(df[col], errors="coerce") if _is_text(df[col]) else df[col]
+        if _num.notna().sum() < max(len(_num) * 0.5, 2):
+            continue
+        q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            outlier_count += int(((_num < q1 - 1.5 * iqr) | (_num > q3 + 1.5 * iqr)).sum())
+
+    # Sentinel and whitespace — dataset-level aggregates
+    total_sentinel_count = 0
+    whitespace_padded_cols = 0
+
+    column_stats = {}
+    for col in df.columns:
+        series = df[col]
+        n = len(series)
+
+        col_stat: dict = {
+            "type":         _dtype_name(series),
+            "null_count":   int(series.isnull().sum()),
+            "null_pct":     round(series.isnull().mean() * 100, 2),
+            "unique_count": int(series.nunique()),
+            "sample_values": [
+                str(v) if isinstance(v, (int, float)) and abs(v) > 1e15 else v
+                for v in series.dropna().head(20).tolist()
+            ],
+        }
+
+        # dtype=str: try numeric coercion for min/max/outlier stats
+        _num_series = series if pd.api.types.is_numeric_dtype(series) else pd.to_numeric(series, errors="coerce")
+        if _num_series.notna().sum() >= max(len(_num_series) * 0.5, 2):
+            col_stat["min"] = float(_num_series.min()) if not _num_series.empty else None
+            col_stat["max"] = float(_num_series.max()) if not _num_series.empty else None
+            q1, q3 = _num_series.quantile(0.25), _num_series.quantile(0.75)
+            iqr = q3 - q1
+            if iqr > 0:
+                outliers = _num_series[(_num_series < q1 - 1.5 * iqr) | (_num_series > q3 + 1.5 * iqr)]
+                col_stat["outlier_examples"] = [float(v) for v in outliers.head(3).tolist()]
+
+        if _is_text(series):
+            str_series = series.astype(str).str.strip().str.lower()
+
+            # Sentinel detection
+            sentinel_count = int(str_series.isin(SENTINEL_VALUES).sum())
+            col_stat["sentinel_count"] = sentinel_count
+            col_stat["sentinel_pct"]   = round(sentinel_count / max(n, 1) * 100, 2)
+            col_stat["true_null_pct"]  = round((col_stat["null_count"] + sentinel_count) / max(n, 1) * 100, 2)
+            total_sentinel_count += sentinel_count
+
+            # Sentinel examples (distinct values found)
+            sentinel_vals_found = series.astype(str).str.strip()[
+                series.astype(str).str.strip().str.lower().isin(SENTINEL_VALUES)
+            ].unique().tolist()
+            col_stat["sentinel_examples"] = [str(v) for v in sentinel_vals_found[:5]]
+
+            # Whitespace-padded count
+            raw_str = series.dropna().astype(str)
+            padded = int((raw_str != raw_str.str.strip()).sum())
+            col_stat["whitespace_padded_count"] = padded
+            if padded > 0:
+                whitespace_padded_cols += 1
+
+            # String pattern diversity
+            patterns = raw_str.apply(_val_pattern).value_counts().head(6)
+            col_stat["string_patterns"]       = {str(k): int(v) for k, v in patterns.items()}
+            col_stat["distinct_pattern_count"] = int(raw_str.apply(_val_pattern).nunique())
+
+            # Value frequency for low-cardinality columns
+            if series.nunique() <= 50:
+                top10 = series.value_counts(dropna=False).head(10)
+                col_stat["value_counts"] = {str(k): int(v) for k, v in top10.items()}
+
+        column_stats[str(col)] = col_stat
+
+    # Dataset-level sentinel pct
+    total_object_cells = int(len(df) * len(_text_cols(df))) or 1
+    sentinel_pct_overall = round(total_sentinel_count / total_object_cells * 100, 2)
+
+    # Penalties
+    null_penalty     = min(null_pct * 0.5, 30)
+    dup_penalty      = min(dup_pct * 0.3, 20)
+    type_penalty     = min(type_mismatches * 5, 20)
+    outlier_penalty  = min(outlier_count / max(total_rows, 1) * 100 * 0.1, 10)
+    sentinel_penalty = min(sentinel_pct_overall * 0.4, 15)
+    ws_penalty       = min(whitespace_padded_cols / max(total_cols, 1) * 100 * 0.1, 5)
+    score = max(0, round(100 - null_penalty - dup_penalty - type_penalty
+                         - outlier_penalty - sentinel_penalty - ws_penalty))
+
+    return {
+        "quality_score":          score,
+        "total_rows":             total_rows,
+        "null_percentage":        null_pct,
+        "duplicate_percentage":   dup_pct,
+        "type_mismatch_count":    type_mismatches,
+        "outlier_count":          outlier_count,
+        "sentinel_pct_overall":   sentinel_pct_overall,
+        "whitespace_padded_cols": whitespace_padded_cols,
+        "column_stats":           column_stats,
+    }
+
+# === END SHARED QUALITY BLOCK ===
+
 
 s3 = boto3.client("s3")
 sns = boto3.client("sns")
@@ -354,7 +620,7 @@ def load_raw_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
 
 def _strip_sidecar_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Remove __orig_* audit sidecar columns from re-ingested processed files."""
-    sidecar_cols = [c for c in df.columns if str(c).startswith("__orig_")]
+    sidecar_cols = [c for c in df.columns if str(c).startswith(SIDECAR_PREFIX)]
     if sidecar_cols:
         print(f"[executor] stripping {len(sidecar_cols)} __orig_* sidecar columns from re-ingested file")
         df = df.drop(columns=sidecar_cols)
@@ -376,450 +642,434 @@ def _to_numeric_clean(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
-def apply_transforms(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
+
+# Tabular rule types the executor implements. Anything else is reported as skipped.
+SUPPORTED_TABULAR_RULES = {
+    "drop_nulls", "deduplicate", "semantic_deduplicate", "type_cast", "rename", "filter",
+    "normalize", "fill_nulls", "trim_whitespace", "ffill", "bfill", "bool_cast", "outlier_cap",
+    "multi_currency_strip", "filter_extended", "split_column", "column_header_normalize",
+    "ner_redact",
+}
+
+# Rule types that only make sense with an existing target column.
+COLUMN_REQUIRED_RULES = {
+    "type_cast", "rename", "filter", "normalize", "fill_nulls", "ffill", "bfill", "bool_cast",
+    "outlier_cap", "filter_extended", "split_column",
+}
+
+ROW_LOSS_GUARD = 0.20  # per-rule maximum row loss for LOSS rules
+
+
+class RuleSkipped(Exception):
+    """Raised inside a rule branch when the rule cannot be applied safely; the frame is restored."""
+
+
+def _add_sidecar(df: pd.DataFrame, col) -> None:
+    sidecar = f"{SIDECAR_PREFIX}{col}"
+    if sidecar not in df.columns:
+        df[sidecar] = df[col]
+
+
+def _row_loss_guard(before: pd.DataFrame, after: pd.DataFrame, rtype: str) -> None:
+    loss_pct = 1 - len(after) / max(len(before), 1)
+    if loss_pct > ROW_LOSS_GUARD:
+        raise RuleSkipped(f"row-loss guard: {rtype} would remove {loss_pct:.0%} of rows (limit {ROW_LOSS_GUARD:.0%})")
+
+
+def _normalize_column(df: pd.DataFrame, col, params: dict) -> None:
+    """Standardize a text column: dates -> YYYY-MM-DD, other strings -> trimmed lowercase.
+
+    Never rescales numeric columns, never turns nulls into "nan"/"none" strings, and never
+    blanks values that fail to parse as dates (they keep their trimmed/lowercased form).
+    """
+    series = df[col]
+    if not _is_text(series):
+        raise RuleSkipped(f"normalize only applies to text/date columns (column dtype is {series.dtype})")
+
+    present = series.notna()
+    as_str = series[present].astype(str)
+    normalized = as_str.str.strip().str.lower()
+
+    sample = as_str.head(50)
+    # Numeric-looking text ("10", "2.5") must never be reinterpreted as dates.
+    looks_numeric = len(sample) > 0 and pd.to_numeric(sample.str.strip(), errors="coerce").notna().mean() > 0.5
+    sample_parsed = pd.to_datetime(sample, format="mixed", dayfirst=False, errors="coerce")
+    if len(sample) and not looks_numeric and sample_parsed.notna().sum() > len(sample) * 0.3:
+        try:
+            parsed = pd.to_datetime(as_str, format="mixed", dayfirst=False, errors="coerce")
+        except Exception:
+            parsed = pd.to_datetime(as_str, errors="coerce")
+        retry_mask = parsed.isna()
+        if retry_mask.any():
+            parsed[retry_mask] = pd.to_datetime(as_str[retry_mask], format="mixed", dayfirst=True, errors="coerce")
+        ok = parsed.notna()
+        # Only parsed values become ISO dates; everything else keeps its normalized text.
+        normalized = normalized.where(~ok, parsed.dt.strftime("%Y-%m-%d"))
+
+    value_map = params.get("value_map") or {}
+    if value_map:
+        vmap = {str(k).strip().lower(): str(v) for k, v in value_map.items()}
+        normalized = normalized.map(lambda v: vmap.get(v, v))
+
+    if normalized.equals(series[present]):
+        return  # nothing to change, no sidecar needed
+    _add_sidecar(df, col)
+    new_col = series.astype(object).copy()
+    new_col[present] = normalized
+    df[col] = new_col
+
+
+def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame:
+    """Apply one rule. Returns the new frame; raises RuleSkipped when it cannot be applied."""
+    if rtype == "drop_nulls":
+        before = df
+        if col:
+            if col not in df.columns:
+                raise RuleSkipped(f"column {col!r} not found")
+            # Column rule: drop rows where this column is null. ("threshold" only applies to
+            # table-level rules; for a single column it has no meaningful interpretation.)
+            df = df[df[col].notna()]
+        else:
+            threshold = params.get("threshold")
+            if isinstance(threshold, (int, float)) and 0 < float(threshold) <= 1:
+                min_non_null = max(1, math.ceil(float(threshold) * df.shape[1]))
+                df = df.dropna(thresh=min_non_null)
+            else:
+                df = df.dropna()
+        _row_loss_guard(before, df, rtype)
+        return df
+
+    if rtype == "deduplicate":
+        subset = [col] if col and col in df.columns else None
+        return df.drop_duplicates(subset=subset, keep="first")
+
+    if rtype == "semantic_deduplicate":
+        target_col = col if col and col in df.columns else None
+        if target_col is None:
+            text_cols = _text_cols(df)
+            target_col = text_cols[0] if text_cols else None
+        if not target_col:
+            raise RuleSkipped("no text column to compare")
+        threshold = float(params.get("threshold", 0.8))
+        num_perm = int(params.get("num_perm", 64))
+
+        def _minhash_sig(text: str, n: int) -> list:
+            tokens = set(text.lower().split()) or {""}
+            return [min((hash((seed, t)) & 0x7FFFFFFF) for t in tokens) for seed in range(n)]
+
+        texts = df[target_col].astype(str).tolist()
+        sigs = [_minhash_sig(t, num_perm) for t in texts]
+        keep, kept_sigs = [], []
+        for i, sig in enumerate(sigs):
+            is_dup = any(sum(a == b for a, b in zip(sig, ks)) / num_perm >= threshold for ks in kept_sigs)
+            if not is_dup:
+                keep.append(i)
+                kept_sigs.append(sig)
+        return df.iloc[keep].reset_index(drop=True)
+
+    if rtype == "type_cast":
+        target = params.get("target_type", "str")
+        if target in ("float", "float64", "numeric", "number", "int", "int64", "datetime", "date", "timestamp"):
+            _add_sidecar(df, col)
+        if target in ("float", "float64", "numeric", "number"):
+            df[col] = _to_numeric_clean(df[col])
+        elif target in ("int", "int64"):
+            df[col] = _to_numeric_clean(df[col]).astype("Int64")  # raises on non-integral values
+        elif target == "str":
+            present = df[col].notna()
+            new_col = df[col].astype(object).copy()
+            new_col[present] = df[col][present].astype(str)
+            df[col] = new_col
+        elif target in ("datetime", "date", "timestamp"):
+            try:
+                parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
+            except Exception:
+                parsed = pd.to_datetime(df[col], errors="coerce")
+            df[col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), other=None)
+        else:
+            try:
+                df[col] = df[col].astype(target)
+            except (TypeError, ValueError) as e:
+                raise RuleSkipped(f"cannot cast to {target!r}: {e}")
+        return df
+
+    if rtype == "rename":
+        new_name = params.get("new_name")
+        if not new_name:
+            raise RuleSkipped("missing new_name")
+        return df.rename(columns={col: new_name})
+
+    if rtype in ("filter", "filter_extended"):
+        before = df
+        operator = params.get("operator", "notnull")
+        value = params.get("value")
+        values = params.get("values", [])
+        pattern = params.get("pattern", "")
+        series = df[col]
+        if operator == "notnull":
+            df = df[series.notna()]
+        elif operator == "eq":
+            df = df[series == value]
+        elif operator == "neq":
+            df = df[series != value]
+        elif operator in ("gt", "lt", "gte", "lte"):
+            num = _to_numeric_clean(series)
+            v = float(value)
+            mask = {"gt": num > v, "lt": num < v, "gte": num >= v, "lte": num <= v}[operator]
+            df = df[mask]
+        elif rtype == "filter_extended" and operator == "contains":
+            df = df[series.astype(str).str.contains(str(value), na=False, regex=False)]
+        elif rtype == "filter_extended" and operator == "not_contains":
+            df = df[~series.astype(str).str.contains(str(value), na=False, regex=False)]
+        elif rtype == "filter_extended" and operator == "in":
+            df = df[series.isin(values)]
+        elif rtype == "filter_extended" and operator == "not_in":
+            df = df[~series.isin(values)]
+        elif rtype == "filter_extended" and operator == "regex":
+            if not pattern or len(pattern) > 200:
+                raise RuleSkipped("regex pattern missing or longer than 200 characters")
+            try:
+                df = df[series.astype(str).str.match(pattern, na=False)]
+            except re.error as e:
+                raise RuleSkipped(f"invalid regex: {e}")
+        elif rtype == "filter_extended" and operator == "startswith":
+            df = df[series.astype(str).str.startswith(str(value), na=False)]
+        elif rtype == "filter_extended" and operator == "endswith":
+            df = df[series.astype(str).str.endswith(str(value), na=False)]
+        else:
+            raise RuleSkipped(f"unsupported operator {operator!r}")
+        _row_loss_guard(before, df, rtype)
+        return df
+
+    if rtype == "normalize":
+        _normalize_column(df, col, params)
+        return df
+
+    if rtype == "fill_nulls":
+        strategy = params.get("strategy", "value")
+        fill_value = params.get("value", "Uncategorized")
+        if strategy in ("mean", "median", "mode"):
+            _add_sidecar(df, col)
+        if strategy == "mean":
+            df[col] = df[col].fillna(_to_numeric_clean(df[col]).mean())
+        elif strategy == "median":
+            df[col] = df[col].fillna(_to_numeric_clean(df[col]).median())
+        elif strategy == "mode":
+            mode = df[col].mode()
+            df[col] = df[col].fillna(mode[0] if len(mode) > 0 else fill_value)
+        else:
+            df[col] = df[col].fillna(fill_value)
+        return df
+
+    if rtype == "trim_whitespace":
+        targets = [col] if (col and col in df.columns) else _text_cols(df)
+        for c in targets:
+            present = df[c].notna()
+            stripped = df[c][present].astype(str).str.strip()
+            new_col = df[c].astype(object).copy()
+            new_col[present] = stripped.where(stripped != "", other=None)
+            df[c] = new_col
+        return df
+
+    if rtype in ("ffill", "bfill"):
+        _add_sidecar(df, col)
+        df[col] = df[col].ffill() if rtype == "ffill" else df[col].bfill()
+        return df
+
+    if rtype == "bool_cast":
+        _add_sidecar(df, col)
+        true_vals = {"true", "yes", "1", "t", "y", "on"}
+        false_vals = {"false", "no", "0", "f", "n", "off"}
+        target = params.get("target", "bool")
+
+        def _cast_bool(v):
+            if pd.isna(v):
+                return v
+            s = str(v).strip().lower()
+            if s in true_vals:
+                return True if target == "bool" else (1 if target == "int" else "true")
+            if s in false_vals:
+                return False if target == "bool" else (0 if target == "int" else "false")
+            return v  # unknown value -> keep original unchanged
+
+        df[col] = df[col].astype(object).map(_cast_bool)
+        return df
+
+    if rtype == "outlier_cap":
+        multiplier = float(params.get("iqr_multiplier", 1.5))
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        if numeric.notna().sum() == 0:
+            raise RuleSkipped("column has no numeric values")
+        q1, q3 = numeric.quantile(0.25), numeric.quantile(0.75)
+        iqr = q3 - q1
+        lower, upper = q1 - multiplier * iqr, q3 + multiplier * iqr
+        if params.get("min_val") is not None:
+            lower = float(params["min_val"])
+        if params.get("max_val") is not None:
+            upper = float(params["max_val"])
+        _add_sidecar(df, col)
+        df[col] = numeric.clip(lower=lower, upper=upper)
+        return df
+
+    if rtype == "multi_currency_strip":
+        targets = [col] if (col and col in df.columns) else _text_cols(df)
+        pattern = r'[$€£¥₹₩]|(?:USD|EUR|GBP|JPY|INR|CAD|AUD|CHF)\s*'
+        converted = 0
+        for c in targets:
+            if not _is_text(df[c]):
+                continue
+            cleaned = df[c].astype(str).str.replace(pattern, "", regex=True)
+            cleaned = cleaned.str.replace(",", "", regex=False).str.strip()
+            numeric = pd.to_numeric(cleaned, errors="coerce")
+            non_null = df[c].notna().sum()
+            if non_null > 0 and numeric.notna().sum() / non_null > 0.5:
+                _add_sidecar(df, c)
+                df[c] = numeric
+                converted += 1
+        if not converted:
+            raise RuleSkipped("no column parsed as currency (>50% numeric after stripping symbols)")
+        return df
+
+    if rtype == "split_column":
+        delimiter = params.get("delimiter", "|")
+        new_col_names = params.get("new_columns", [])
+        max_splits = int(params.get("max_splits", -1))
+        split_df = df[col].astype(str).str.split(
+            pat=re.escape(delimiter), n=max_splits if max_splits > 0 else -1, expand=True, regex=True,
+        )
+        for i in range(split_df.shape[1]):
+            new_name = new_col_names[i] if i < len(new_col_names) else f"{col}_part{i + 1}"
+            df[new_name] = split_df[i]
+        return df  # source column preserved
+
+    if rtype == "column_header_normalize":
+        def _to_snake(name: str) -> str:
+            s = str(name).strip()
+            s = re.sub(r'[^\w\s]', '_', s)
+            s = re.sub(r'\s+', '_', s)
+            s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
+            s = re.sub(r'_+', '_', s)
+            return s.lower().strip('_')
+        rename_map = {c: _to_snake(str(c)) for c in df.columns if _to_snake(str(c)) != str(c)}
+        if rename_map:
+            df = df.rename(columns=rename_map)
+        return df
+
+    if rtype == "ner_redact":
+        entities = params.get("entities", ["PERSON", "ORG", "GPE", "DATE"])
+        repl_token = str(params.get("replacement", "[REDACTED]"))
+        targets = [col] if (col and col in df.columns) else _text_cols(df)
+        patterns: list = []
+        if "PERSON" in entities:
+            patterns += [
+                r'\b(?:Mr|Mrs|Ms|Dr|Prof)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b',
+                r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b',
+            ]
+        if "ORG" in entities:
+            patterns += [r'\b[A-Z][A-Za-z\s&,\.]{2,50}(?:Inc|LLC|Ltd|LLP|Corp|Co|Company|Group|Holdings|Technologies|Solutions|Services|Associates|Consulting|Industries|Enterprises)\.?\b']
+        if "GPE" in entities:
+            us_states = (
+                "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|"
+                "Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|"
+                "Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|"
+                "Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|"
+                "New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|"
+                "Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|"
+                "Virginia|Washington|West Virginia|Wisconsin|Wyoming"
+            )
+            patterns += [
+                r'\b\d{1,5}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}(?:\s+(?:St|Ave|Blvd|Rd|Dr|Ln|Way|Ct|Pl|Terrace|Circle|Drive|Street|Avenue|Road|Lane|Court|Place)\.?)?\b',
+                rf'\b(?:{us_states})\b',
+                r'\b\d{5}(?:-\d{4})?\b',
+            ]
+        if "DATE" in entities:
+            patterns += [
+                r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b',
+                r'\b\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\b',
+            ]
+        if "IP" in entities:
+            patterns += [r'\b(?:\d{1,3}\.){3}\d{1,3}\b']
+        if not patterns:
+            raise RuleSkipped("no supported entity types requested")
+
+        def _apply_ner(text: str) -> str:
+            for p in patterns:
+                text = re.sub(p, repl_token, text)
+            return text
+
+        for c in targets:
+            present = df[c].notna()
+            redacted = df[c][present].astype(str).map(_apply_ner)
+            new_col = df[c].astype(object).copy()
+            new_col[present] = redacted.where(redacted != "", other=None)
+            df[c] = new_col
+        return df
+
+    raise RuleSkipped(f"unsupported rule type {rtype!r}")
+
+
+def apply_transforms(df: pd.DataFrame, rules: list[dict], results: list | None = None) -> pd.DataFrame:
+    """Apply rules in order.
+
+    A rule that is skipped or raises leaves the frame exactly as it was before that rule
+    (no half-applied changes, no stray sidecar columns). When ``results`` is given, one entry
+    per rule is appended: {"id", "rule_type", "column_name", "applied", "reason"}.
+    """
     for rule in rules:
         rtype = rule["rule_type"]
         col = rule.get("column_name")
         params = _parse_params(rule.get("parameters"))
-
+        snapshot = df.copy()
+        applied, reason = True, None
         try:
-            if rtype == "drop_nulls":
-                df_before_rule = df.copy()
-                if col and col in df.columns:
-                    threshold = params.get("threshold", 0.0)
-                    if isinstance(threshold, (int, float)) and float(threshold) < 1.0:
-                        min_count = int(len(df) * (1 - float(threshold)))
-                        df = df.dropna(subset=[col], thresh=min_count)
-                    else:
-                        df = df.dropna(subset=[col])
-                elif not col:
-                    df = df.dropna()
-                loss_pct = 1 - len(df) / max(len(df_before_rule), 1)
-                if loss_pct > 0.20:
-                    print(f"[executor] drop_nulls row-loss guard: {loss_pct:.0%} loss, reverting")
-                    df = df_before_rule
-
-            elif rtype == "deduplicate":
-                subset = [col] if col and col in df.columns else None
-                df = df.drop_duplicates(subset=subset, keep="first")
-
-            elif rtype == "semantic_deduplicate":
-                target_col = col if col and col in df.columns else None
-                if target_col is None:
-                    obj_cols = df.select_dtypes(include="object").columns.tolist()
-                    target_col = obj_cols[0] if obj_cols else None
-                if target_col:
-                    threshold = float(params.get("threshold", 0.8))
-                    num_perm  = int(params.get("num_perm", 64))
-
-                    def _minhash_sig(text: str, n: int) -> list:
-                        tokens = set(text.lower().split()) or {""}
-                        return [min((hash((seed, t)) & 0x7FFFFFFF) for t in tokens) for seed in range(n)]
-
-                    texts = df[target_col].astype(str).tolist()
-                    sigs  = [_minhash_sig(t, num_perm) for t in texts]
-                    keep  = []
-                    kept_sigs: list = []
-                    for i, sig in enumerate(sigs):
-                        is_dup = any(
-                            sum(a == b for a, b in zip(sig, ks)) / num_perm >= threshold
-                            for ks in kept_sigs
-                        )
-                        if not is_dup:
-                            keep.append(i)
-                            kept_sigs.append(sig)
-                    df = df.iloc[keep].reset_index(drop=True)
-
-            elif rtype == "type_cast":
-                if col and col in df.columns:
-                    target = params.get("target_type", "str")
-                    # Sidecar for irreversible casts — non-parseable originals become NaN/NaT with no recovery
-                    if target in ("float", "float64", "numeric", "number", "int", "int64", "datetime", "date", "timestamp"):
-                        sidecar = f"__orig_{col}"
-                        if sidecar not in df.columns:
-                            df[sidecar] = df[col]
-                    if target in ("float", "float64", "numeric", "number"):
-                        df[col] = _to_numeric_clean(df[col])
-                    elif target in ("int", "int64"):
-                        df[col] = _to_numeric_clean(df[col]).astype("Int64")
-                    elif target == "str":
-                        df[col] = df[col].astype(str)
-                    elif target in ("datetime", "date", "timestamp"):
-                        try:
-                            parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
-                        except Exception:
-                            parsed = pd.to_datetime(df[col], errors="coerce")
-                        # Replace NaT with None (null) not string "NaT"
-                        df[col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), other=None)
-                    else:
-                        df[col] = df[col].astype(target, errors="ignore")
-
-            elif rtype == "rename":
-                if col and col in df.columns:
-                    new_name = params.get("new_name")
-                    if new_name:
-                        df = df.rename(columns={col: new_name})
-
-            elif rtype == "filter":
-                if col and col in df.columns:
-                    df_before_rule = df.copy()
-                    operator = params.get("operator", "notnull")
-                    value = params.get("value")
-                    if operator == "notnull":
-                        df = df[df[col].notna()]
-                    elif operator == "eq":
-                        df = df[df[col] == value]
-                    elif operator == "neq":
-                        df = df[df[col] != value]
-                    elif operator == "gt":
-                        df = df[_to_numeric_clean(df[col]) > float(value)]
-                    elif operator == "lt":
-                        df = df[_to_numeric_clean(df[col]) < float(value)]
-                    loss_pct = 1 - len(df) / max(len(df_before_rule), 1)
-                    if loss_pct > 0.20:
-                        print(f"[executor] filter row-loss guard: {loss_pct:.0%} loss, reverting")
-                        df = df_before_rule
-
-            elif rtype == "normalize":
-                if col and col in df.columns:
-                    if df[col].dtype == object:
-                        # Sample 50 rows to decide if column looks like dates before full parse
-                        sample = df[col].dropna().astype(str).head(50)
-                        sample_parsed = pd.to_datetime(sample, format="mixed", dayfirst=False, errors="coerce")
-                        looks_like_dates = sample_parsed.notna().sum() > len(sample) * 0.3
-                        if looks_like_dates:
-                            try:
-                                parsed = pd.to_datetime(df[col], format="mixed", dayfirst=False, errors="coerce")
-                            except Exception:
-                                parsed = pd.to_datetime(df[col], errors="coerce")
-                            # Retry still-NaT values with dayfirst=True
-                            mask = parsed.isna() & df[col].notna() & (df[col].astype(str) != "nan")
-                            if mask.any():
-                                retry = pd.to_datetime(df[col][mask], format="mixed", dayfirst=True, errors="coerce")
-                                parsed[mask] = retry
-                            if parsed.notna().sum() > len(df) * 0.3:
-                                df[col] = parsed.dt.strftime("%Y-%m-%d")
-                            else:
-                                df[col] = df[col].astype(str).str.strip().str.lower()
-                        else:
-                            df[col] = df[col].astype(str).str.strip().str.lower()
-                        # Apply value_map after normalization — maps lowercased variants to canonical form
-                        value_map = params.get("value_map", {})
-                        if value_map:
-                            vmap_lower = {str(k).strip().lower(): str(v) for k, v in value_map.items()}
-                            def _apply_vmap(v):
-                                if pd.isna(v) or str(v) == "nan":
-                                    return v
-                                return vmap_lower.get(str(v).strip().lower(), v)
-                            df[col] = df[col].apply(_apply_vmap)
-                    else:
-                        sidecar = f"__orig_{col}"
-                        if sidecar not in df.columns:
-                            df[sidecar] = df[col]
-                        numeric = pd.to_numeric(df[col], errors="coerce")
-                        col_min, col_max = numeric.min(), numeric.max()
-                        if col_max > col_min:
-                            df[col] = (numeric - col_min) / (col_max - col_min)
-
-            elif rtype == "fill_nulls":
-                if col and col in df.columns:
-                    strategy = params.get("strategy", "value")
-                    fill_value = params.get("value", "Uncategorized")
-                    # Sidecar for SYNTHETIC strategies — preserves originals for audit/rollback
-                    if strategy in ("mean", "median", "mode"):
-                        sidecar = f"__orig_{col}"
-                        if sidecar not in df.columns:
-                            df[sidecar] = df[col]
-                    if strategy == "mean":
-                        df[col] = df[col].fillna(_to_numeric_clean(df[col]).mean())
-                    elif strategy == "median":
-                        df[col] = df[col].fillna(_to_numeric_clean(df[col]).median())
-                    elif strategy == "mode":
-                        mode = df[col].mode()
-                        df[col] = df[col].fillna(mode[0] if len(mode) > 0 else fill_value)
-                    else:
-                        df[col] = df[col].fillna(fill_value)
-
-            elif rtype == "trim_whitespace":
-                targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
-                for c in targets:
-                    was_null = df[c].isna()
-                    df[c] = df[c].astype(str).str.strip()
-                    # Null only cells that were already null (serialized to "nan" by astype(str)) or became empty after strip
-                    # Preserves legitimate string value "nan" (e.g. currency ticker, city name)
-                    df[c] = df[c].where(~(was_null | (df[c] == "")), other=None)
-
-            elif rtype == "ffill":
-                if col and col in df.columns:
-                    sidecar = f"__orig_{col}"
-                    if sidecar not in df.columns:
-                        df[sidecar] = df[col]
-                    df[col] = df[col].ffill()
-
-            elif rtype == "bfill":
-                if col and col in df.columns:
-                    sidecar = f"__orig_{col}"
-                    if sidecar not in df.columns:
-                        df[sidecar] = df[col]
-                    df[col] = df[col].bfill()
-
-            elif rtype == "bool_cast":
-                if col and col in df.columns:
-                    sidecar = f"__orig_{col}"
-                    if sidecar not in df.columns:
-                        df[sidecar] = df[col]
-                    TRUE_VALS = {"true", "yes", "1", "t", "y", "on"}
-                    FALSE_VALS = {"false", "no", "0", "f", "n", "off"}
-                    target = params.get("target", "bool")
-                    def _cast_bool(v):
-                        if pd.isna(v):
-                            return v
-                        s = str(v).strip().lower()
-                        if s in TRUE_VALS:
-                            return True if target == "bool" else (1 if target == "int" else "true")
-                        if s in FALSE_VALS:
-                            return False if target == "bool" else (0 if target == "int" else "false")
-                        return v  # unknown value → keep original unchanged
-                    df[col] = df[col].apply(_cast_bool)
-
-            elif rtype == "outlier_cap":
-                if col and col in df.columns:
-                    multiplier = float(params.get("iqr_multiplier", 1.5))
-                    numeric = pd.to_numeric(df[col], errors="coerce")
-                    q1 = numeric.quantile(0.25)
-                    q3 = numeric.quantile(0.75)
-                    iqr = q3 - q1
-                    lower = q1 - multiplier * iqr
-                    upper = q3 + multiplier * iqr
-                    # Explicit domain bounds override IQR (tighter constraints for known ranges)
-                    if params.get("min_val") is not None:
-                        lower = float(params["min_val"])
-                    if params.get("max_val") is not None:
-                        upper = float(params["max_val"])
-                    sidecar = f"__orig_{col}"
-                    if sidecar not in df.columns:
-                        df[sidecar] = df[col]
-                    df[col] = numeric.clip(lower=lower, upper=upper)
-
-            elif rtype == "multi_currency_strip":
-                targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
-                CURRENCY_PATTERN = r'[$€£¥₹₩]|(?:USD|EUR|GBP|JPY|INR|CAD|AUD|CHF)\s*'
-                for c in targets:
-                    if df[c].dtype != object:
-                        continue
-                    cleaned = df[c].astype(str).str.replace(CURRENCY_PATTERN, "", regex=True)
-                    cleaned = cleaned.str.replace(",", "", regex=False).str.strip()
-                    numeric = pd.to_numeric(cleaned, errors="coerce")
-                    non_null = df[c].notna().sum()
-                    parsed_ok = numeric.notna().sum()
-                    if non_null > 0 and parsed_ok / non_null > 0.5:
-                        sidecar = f"__orig_{c}"
-                        if sidecar not in df.columns:
-                            df[sidecar] = df[c]
-                        df[c] = numeric
-                    else:
-                        print(f"[executor] multi_currency_strip: {c} — only {parsed_ok}/{non_null} parsed, skipping")
-
-            elif rtype == "filter_extended":
-                if col and col in df.columns:
-                    operator = params.get("operator", "notnull")
-                    value = params.get("value")
-                    values = params.get("values", [])
-                    pattern = params.get("pattern", "")
-                    df_before_rule = df.copy()
-                    if operator == "notnull":
-                        df = df[df[col].notna()]
-                    elif operator == "eq":
-                        df = df[df[col] == value]
-                    elif operator == "neq":
-                        df = df[df[col] != value]
-                    elif operator == "gt":
-                        df = df[_to_numeric_clean(df[col]) > float(value)]
-                    elif operator == "lt":
-                        df = df[_to_numeric_clean(df[col]) < float(value)]
-                    elif operator == "gte":
-                        df = df[_to_numeric_clean(df[col]) >= float(value)]
-                    elif operator == "lte":
-                        df = df[_to_numeric_clean(df[col]) <= float(value)]
-                    elif operator == "contains":
-                        df = df[df[col].astype(str).str.contains(str(value), na=False)]
-                    elif operator == "not_contains":
-                        df = df[~df[col].astype(str).str.contains(str(value), na=False)]
-                    elif operator == "in":
-                        df = df[df[col].isin(values)]
-                    elif operator == "not_in":
-                        df = df[~df[col].isin(values)]
-                    elif operator == "regex":
-                        if len(pattern) <= 200:
-                            try:
-                                df = df[df[col].astype(str).str.match(pattern, na=False)]
-                            except re.error as e:
-                                print(f"[executor] filter_extended regex error: {e}")
-                    elif operator == "startswith":
-                        df = df[df[col].astype(str).str.startswith(str(value), na=False)]
-                    elif operator == "endswith":
-                        df = df[df[col].astype(str).str.endswith(str(value), na=False)]
-                    # Per-rule row loss guard (Safeguard 3)
-                    loss_pct = (len(df_before_rule) - len(df)) / max(len(df_before_rule), 1)
-                    if loss_pct > 0.20:
-                        print(f"[executor] SAFETY: filter_extended on {col} deleted {loss_pct:.1%} rows — restoring")
-                        df = df_before_rule
-
-            elif rtype == "split_column":
-                if col and col in df.columns:
-                    delimiter = params.get("delimiter", "|")
-                    new_col_names = params.get("new_columns", [])
-                    max_splits = int(params.get("max_splits", -1))
-                    split_df = df[col].astype(str).str.split(
-                        pat=re.escape(delimiter),
-                        n=max_splits if max_splits > 0 else -1,
-                        expand=True,
-                    )
-                    for i in range(split_df.shape[1]):
-                        new_name = new_col_names[i] if i < len(new_col_names) else f"{col}_part{i + 1}"
-                        df[new_name] = split_df[i]
-                    # Source column preserved — user can drop manually
-
-            elif rtype == "column_header_normalize":
-                def _to_snake(name: str) -> str:
-                    s = str(name).strip()
-                    s = re.sub(r'[^\w\s]', '_', s)
-                    s = re.sub(r'\s+', '_', s)
-                    s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
-                    s = re.sub(r'_+', '_', s)
-                    return s.lower().strip('_')
-                rename_map = {}
-                for c in df.columns:
-                    new_name = _to_snake(str(c))
-                    if new_name != str(c):
-                        rename_map[c] = new_name
-                if rename_map:
-                    df = df.rename(columns=rename_map)
-                    print(f"[executor] column_header_normalize: renamed {len(rename_map)} columns")
-
-            elif rtype == "ner_redact":
-                entities   = params.get("entities", ["PERSON", "ORG", "GPE", "DATE"])
-                repl_token = str(params.get("replacement", "[REDACTED]"))
-                targets = [col] if (col and col in df.columns) else df.select_dtypes(include="object").columns.tolist()
-
-                _NER_PATTERNS: list[tuple[str, str]] = []
-                if "PERSON" in entities:
-                    _NER_PATTERNS += [
-                        # Title + name  (Mr. John Smith)
-                        (r'\b(?:Mr|Mrs|Ms|Dr|Prof)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b', repl_token),
-                        # First Last (two capitalised words, 3+ chars each, not start of sentence POS)
-                        (r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', repl_token),
-                    ]
-                if "ORG" in entities:
-                    _NER_PATTERNS += [
-                        (r'\b[A-Z][A-Za-z\s&,\.]{2,50}(?:Inc|LLC|Ltd|LLP|Corp|Co|Company|Group|Holdings|Technologies|Solutions|Services|Associates|Consulting|Industries|Enterprises)\.?\b', repl_token),
-                    ]
-                if "GPE" in entities:
-                    _us_states = (
-                        "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|"
-                        "Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|"
-                        "Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|"
-                        "Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|"
-                        "New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|"
-                        "Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|"
-                        "Virginia|Washington|West Virginia|Wisconsin|Wyoming"
-                    )
-                    _NER_PATTERNS += [
-                        # US street address
-                        (r'\b\d{1,5}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}(?:\s+(?:St|Ave|Blvd|Rd|Dr|Ln|Way|Ct|Pl|Terrace|Circle|Drive|Street|Avenue|Road|Lane|Court|Place)\.?)?\b', repl_token),
-                        # US state names
-                        (rf'\b(?:{_us_states})\b', repl_token),
-                        # US ZIP code
-                        (r'\b\d{5}(?:-\d{4})?\b', repl_token),
-                    ]
-                if "DATE" in entities:
-                    _NER_PATTERNS += [
-                        # Month DD, YYYY
-                        (r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b', repl_token),
-                        # MM/DD/YYYY or DD/MM/YYYY
-                        (r'\b\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\b', repl_token),
-                    ]
-                if "IP" in entities:
-                    _NER_PATTERNS += [
-                        (r'\b(?:\d{1,3}\.){3}\d{1,3}\b', repl_token),
-                    ]
-
-                def _apply_ner(text: str) -> str:
-                    for pattern, replacement in _NER_PATTERNS:
-                        text = re.sub(pattern, replacement, text)
-                    return text
-
-                for c in targets:
-                    was_null = df[c].isna()
-                    df[c] = df[c].astype(str).apply(_apply_ner)
-                    # Consistent with trim_whitespace: only null cells that were already null or became empty
-                    df[c] = df[c].where(~(was_null | (df[c] == "")), other=None)
-
-        except Exception as e:
-            print(f"[executor] skipping rule {rtype} on {col}: {e}")
-
+            if rtype not in SUPPORTED_TABULAR_RULES:
+                raise RuleSkipped(f"unsupported rule type {rtype!r}")
+            if rtype in COLUMN_REQUIRED_RULES and (not col or col not in df.columns):
+                raise RuleSkipped(f"column {col!r} not found")
+            df = _apply_rule(df, rtype, col, params)
+        except RuleSkipped as e:
+            df, applied, reason = snapshot, False, str(e)
+        except Exception as e:  # unexpected failure: restore and report, never silently half-apply
+            df, applied, reason = snapshot, False, f"error: {type(e).__name__}: {e}"[:500]
+        if not applied:
+            print(f"[executor] rule {rtype} on {col} not applied: {reason}")
+        if results is not None:
+            results.append({"id": rule.get("id"), "rule_type": rtype, "column_name": col,
+                            "applied": applied, "reason": reason})
     return df
 
 
-def compute_quality_profile(df: pd.DataFrame) -> dict:
-    total_cells = df.size or 1
-    total_rows = len(df)
+def split_deliverable(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+    """Return (deliverable without __orig_* sidecars, audit frame or None if no sidecars).
 
-    null_count = df.isnull().sum().sum()
-    null_pct = round(null_count / total_cells * 100, 2)
+    The audit frame keeps every column, so each cleaned value sits next to its original.
+    """
+    sidecars = [c for c in df.columns if str(c).startswith(SIDECAR_PREFIX)]
+    if not sidecars:
+        return df, None
+    return df.drop(columns=sidecars), df
 
-    dup_count = df.duplicated().sum()
-    dup_pct = round(dup_count / max(total_rows, 1) * 100, 2)
 
-    type_mismatches = 0
-    for col in df.columns:
-        if df[col].dtype == object:
-            numeric_count = pd.to_numeric(df[col], errors="coerce").notna().sum()
-            if 0 < numeric_count < len(df[col]):
-                type_mismatches += 1
+def audit_key_for(processed_key: str) -> str:
+    """'processed/{pipeline}/{run}/output.json' -> 'processed/{pipeline}/{run}/audit.csv'."""
+    return processed_key.rsplit("/", 1)[0] + "/audit.csv"
 
-    outlier_count = 0
-    for col in df.select_dtypes(include=[np.number]).columns:
-        q1, q3 = df[col].quantile(0.25), df[col].quantile(0.75)
-        iqr = q3 - q1
-        outlier_count += int(
-            df[(df[col] < q1 - 1.5 * iqr) | (df[col] > q3 + 1.5 * iqr)][col].count()
-        )
 
-    null_penalty = min(null_pct * 0.5, 30)
-    dup_penalty = min(dup_pct * 0.3, 20)
-    type_penalty = min(type_mismatches * 5, 20)
-    outlier_penalty = min(outlier_count / max(total_rows, 1) * 100 * 0.1, 10)
-    score = max(0, round(100 - null_penalty - dup_penalty - type_penalty - outlier_penalty))
+def profile_output(file_bytes: bytes, fmt: str, fallback_df: pd.DataFrame) -> dict:
+    """Score the written deliverable exactly as the profiler scores raw uploads (review M1).
 
-    column_stats = {}
-    for col in df.columns:
-        series = df[col]
-        stat = {
-            "type": str(series.dtype),
-            "null_count": int(series.isnull().sum()),
-            "null_pct": round(series.isnull().mean() * 100, 2),
-            "unique_count": int(series.nunique()),
-            "sample_values": [str(v) for v in series.dropna().head(5).tolist()],
-        }
-        if pd.api.types.is_numeric_dtype(series):
-            stat["min"] = float(series.min()) if not series.empty else None
-            stat["max"] = float(series.max()) if not series.empty else None
-        column_stats[str(col)] = stat
-
-    return {
-        "quality_score": score,
-        "total_rows": total_rows,
-        "null_percentage": null_pct,
-        "duplicate_percentage": dup_pct,
-        "type_mismatch_count": type_mismatches,
-        "outlier_count": outlier_count,
-        "column_stats": column_stats,
-    }
+    Re-reads the bytes with the shared loader so raw and processed scores come from the same
+    representation and the same formula; a run with zero applied rules keeps its score.
+    """
+    try:
+        return compute_quality_score(load_dataframe(file_bytes, fmt))
+    except Exception as e:
+        print(f"[executor] could not re-load {fmt} output for scoring ({e}); scoring the frame directly")
+        return compute_quality_score(fallback_df)
 
 
 def schema_hash(df: pd.DataFrame) -> tuple[str, dict]:
-    col_defs = {str(col): str(df[col].dtype) for col in df.columns}
+    col_defs = {str(col): _dtype_name(df[col]) for col in df.columns}
     h = hashlib.sha256(json.dumps(col_defs, sort_keys=True).encode()).hexdigest()
     return h, col_defs
 
@@ -886,20 +1136,127 @@ def _maybe_auto_iterate(cur, conn, s3_client, run_id, pipeline_id, raw_s3_key, f
         # Don't raise — auto-iterate failure must not fail the current run
 
 
-def handler(event, context):
-    record = event["Records"][0]
-    body = json.loads(record["body"])
-    run_id = body["run_id"]
+def _record_rule_results(cur, results: list) -> None:
+    """Persist each rule's outcome to transform_rules.parameters._execution.
 
+    Follows the existing convention of executor/committee metadata living in
+    parameters (auto-validate writes _reject_reasons there), so no schema
+    change is needed and the run page can show "Not applied: <reason>".
+    """
+    for r in results:
+        if not r.get("id"):
+            continue
+        cur.execute(
+            "UPDATE transform_rules SET parameters = COALESCE(parameters, '{}'::jsonb) || %s::jsonb WHERE id = %s",
+            (json.dumps({"_execution": {"applied": r["applied"], "reason": r["reason"]}}), r["id"]),
+        )
+
+
+
+def _run_prefix(raw_s3_key: str) -> str | None:
+    """'{user}/{pipeline}/{run}/raw.csv' -> '{user}/{pipeline}/{run}/'. None if the key is not run-scoped."""
+    parts = raw_s3_key.split("/")
+    if len(parts) < 4 or not all(parts[:3]):
+        return None
+    return "/".join(parts[:3]) + "/"
+
+
+def delete_raw_run_objects(s3_client, bucket: str, raw_s3_key: str) -> dict:
+    """Delete everything under the run's raw prefix: the upload AND extracted_text.txt (review H5).
+
+    Lists and deletes every object version and delete marker, so nothing stays recoverable on a
+    versioned bucket. Falls back to deleting the current version of the two known keys when the
+    role may not list/delete versions. Never raises: cleanup must not fail a completed run.
+    """
+    prefix = _run_prefix(raw_s3_key)
+    known_keys = [raw_s3_key] + ([prefix + "extracted_text.txt"] if prefix else [])
+    try:
+        if not prefix:
+            raise ValueError(f"refusing to purge non run-scoped key {raw_s3_key!r}")
+        objects = []
+        paginator = s3_client.get_paginator("list_object_versions")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for item in page.get("Versions", []) + page.get("DeleteMarkers", []):
+                objects.append({"Key": item["Key"], "VersionId": item["VersionId"]})
+        for i in range(0, len(objects), 1000):
+            s3_client.delete_objects(Bucket=bucket, Delete={"Objects": objects[i:i + 1000], "Quiet": True})
+        print(f"[executor] purged {len(objects)} object versions under s3://{bucket}/{prefix}")
+        return {"mode": "all_versions", "deleted": len(objects)}
+    except Exception as e:
+        print(f"[executor] version purge failed ({e}); deleting current versions of known keys")
+        deleted = 0
+        for key in known_keys:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=key)
+                deleted += 1
+            except Exception as del_err:
+                print(f"[executor] delete of s3://{bucket}/{key} failed (non-fatal): {del_err}")
+        return {"mode": "current_only", "deleted": deleted}
+
+
+# A 'running' run whose last update is older than this is an abandoned lease (Lambda's hard
+# limit is 15 minutes, so the invocation that claimed it is gone) and may be re-claimed.
+STALE_RUNNING_MINUTES = 15
+
+# Conditional transition: of N deliveries of the same message only one gets a row back (review H4).
+CLAIM_SQL = f"""UPDATE pipeline_runs SET status = 'running', updated_at = now()
+               WHERE id = %s
+                 AND (status = 'queued'
+                      OR (status = 'running' AND updated_at < now() - interval '{STALE_RUNNING_MINUTES} minutes'))
+               RETURNING id"""
+
+
+def _publish_drift(cur, conn, pipeline_id: str, run_id: str, df: pd.DataFrame) -> None:
+    """Snapshot the deliverable's schema and publish to SNS when it changed since the last run."""
+    new_hash, col_defs = schema_hash(df)
+    cur.execute(
+        """SELECT schema_hash FROM schema_snapshots
+           WHERE pipeline_id = %s
+           ORDER BY created_at DESC LIMIT 1""",
+        (pipeline_id,)
+    )
+    last = cur.fetchone()
+    cur.execute(
+        """INSERT INTO schema_snapshots (pipeline_id, run_id, schema_hash, column_definitions)
+           VALUES (%s, %s, %s, %s)""",
+        (pipeline_id, run_id, new_hash, json.dumps(col_defs))
+    )
+    conn.commit()
+    if last and last[0] != new_hash:
+        sns_topic = os.environ.get("SNS_DRIFT_TOPIC_ARN")
+        if sns_topic:
+            sns.publish(
+                TopicArn=sns_topic,
+                Subject=f"Schema drift detected — pipeline {pipeline_id}",
+                Message=json.dumps({
+                    "pipeline_id": pipeline_id,
+                    "run_id": run_id,
+                    "previous_hash": last[0],
+                    "new_hash": new_hash,
+                    "new_schema": col_defs,
+                }),
+            )
+
+
+def process_run(run_id: str, receive_count: int = 1) -> dict:
+    """Execute one run.
+
+    Idempotent: a duplicate or late message for a run that is not 'queued' (or an abandoned
+    'running' lease) is a no-op, so SQS at-least-once delivery can no longer flip a completed run
+    to 'failed'. A failure before completion releases the claim and raises so SQS retries, up to
+    EXECUTOR_MAX_ATTEMPTS deliveries; the last attempt marks the run failed and returns.
+    """
+    max_attempts = int(os.environ.get("EXECUTOR_MAX_ATTEMPTS", "3"))
     conn = get_db_conn()
     cur = conn.cursor()
-
+    completed = False
     try:
-        cur.execute(
-            "UPDATE pipeline_runs SET status = 'running', updated_at = now() WHERE id = %s",
-            (run_id,)
-        )
+        cur.execute(CLAIM_SQL, (run_id,))
+        claimed = cur.fetchone()
         conn.commit()
+        if not claimed:
+            print(f"[executor] run {run_id} is not queued (already processed or in progress) — skipping duplicate message")
+            return {"statusCode": 200, "run_id": run_id, "skipped": True}
 
         # Fetch run metadata + pipeline settings
         cur.execute(
@@ -920,14 +1277,14 @@ def handler(event, context):
 
         # Fetch approved rules ordered by index
         cur.execute(
-            """SELECT rule_type, column_name, parameters
+            """SELECT id, rule_type, column_name, parameters
                FROM transform_rules
                WHERE run_id = %s AND status = 'approved'
                ORDER BY order_index ASC""",
             (run_id,)
         )
         all_rules = [
-            {"rule_type": r[0], "column_name": r[1], "parameters": r[2]}
+            {"id": str(r[0]), "rule_type": r[1], "column_name": r[2], "parameters": r[3]}
             for r in cur.fetchall()
         ]
 
@@ -951,6 +1308,7 @@ def handler(event, context):
         fmt = file_format or raw_s3_key.rsplit(".", 1)[-1].lower()
 
         processed_bucket = os.environ["S3_PROCESSED_BUCKET"]
+        rule_results: list = []
 
         if run_mode == "document":
             text_key = "/".join(raw_s3_key.rsplit("/", 1)[:-1]) + "/extracted_text.txt"
@@ -994,7 +1352,7 @@ def handler(event, context):
         else:
             df = load_raw_dataframe(file_bytes, fmt)
             input_row_count = len(df)
-            df = apply_transforms(df, rules)
+            df = apply_transforms(df, rules, rule_results)
 
             # Row count guard for auto-mode passes 2+ — abort if >10% rows deleted
             if auto_mode and iteration > 1 and row_count_raw:
@@ -1009,18 +1367,18 @@ def handler(event, context):
                     conn.commit()
                     return {"statusCode": 200, "run_id": run_id, "aborted": True}
 
-            # Write processed file in native format to S3
-            file_bytes, content_type, ext = save_dataframe(df, fmt)
+            # The deliverable never contains __orig_* sidecars; they go to a separate
+            # audit file next to it, so downloads can be served byte-for-byte from S3.
+            deliverable, audit = split_deliverable(df)
+            out_bytes, content_type, ext = save_dataframe(deliverable, fmt)
             processed_key = f"processed/{pipeline_id}/{run_id}/output.{ext}"
-            s3.put_object(
-                Bucket=processed_bucket,
-                Key=processed_key,
-                Body=file_bytes,
-                ContentType=content_type,
-            )
-            # Strip __orig_* sidecar columns before profiling — they inflate type_mismatch and trigger false drift alerts
-            df_for_profile = df[[c for c in df.columns if not str(c).startswith("__orig_")]]
-            profile = compute_quality_profile(df_for_profile)
+            s3.put_object(Bucket=processed_bucket, Key=processed_key, Body=out_bytes, ContentType=content_type)
+            if audit is not None:
+                audit_bytes, _, _ = save_dataframe(audit, "csv")
+                s3.put_object(Bucket=processed_bucket, Key=audit_key_for(processed_key),
+                              Body=audit_bytes, ContentType="text/csv")
+            df = deliverable
+            profile = profile_output(out_bytes, ext, deliverable)
 
         cur.execute(
             """INSERT INTO data_profiles
@@ -1038,97 +1396,83 @@ def handler(event, context):
                 json.dumps(_sanitize_nan(profile["column_stats"]), cls=_NpEncoder),
             ),
         )
+        _record_rule_results(cur, rule_results)
 
         cur.execute(
             """UPDATE pipeline_runs
                SET status = 'completed',
                    processed_s3_key = %s,
                    row_count_processed = %s,
+                   error_message = NULL,
                    completed_at = now(),
                    updated_at = now()
                WHERE id = %s""",
             (processed_key, profile["total_rows"], run_id),
         )
         conn.commit()
+        completed = True
 
-        # Schema drift detection — tabular only
-        if run_mode == "document":
-            # Auto-iterate for document mode — copy raw file BEFORE deleting it
-            if auto_mode and iteration < 3:
-                _maybe_auto_iterate(
-                    cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
-                    processed_key, iteration, profile["quality_score"]
-                )
-            # Delete raw file AFTER auto-iterate has copied it (if applicable)
-            if auto_delete_raw:
-                try:
-                    raw_bucket = os.environ["S3_RAW_BUCKET"]
-                    s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
-                    print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
-                except Exception as del_err:
-                    print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
-            return {"statusCode": 200, "run_id": run_id}
+        # ---- Post-completion steps: each is best effort and must never flip a completed run ----
+        if run_mode != "document":
+            try:
+                _publish_drift(cur, conn, pipeline_id, run_id, df)
+            except Exception as drift_err:
+                conn.rollback()
+                print(f"[executor] drift snapshot failed for run {run_id} (run stays completed): {drift_err}")
 
-        # Strip __orig_* sidecar columns before schema hash — sidecars must not trigger drift alerts
-        df_for_schema = df[[c for c in df.columns if not str(c).startswith("__orig_")]]
-        new_hash, col_defs = schema_hash(df_for_schema)
-
-        cur.execute(
-            """SELECT schema_hash FROM schema_snapshots
-               WHERE pipeline_id = %s
-               ORDER BY created_at DESC LIMIT 1""",
-            (pipeline_id,)
-        )
-        last = cur.fetchone()
-
-        cur.execute(
-            """INSERT INTO schema_snapshots (pipeline_id, run_id, schema_hash, column_definitions)
-               VALUES (%s, %s, %s, %s)""",
-            (pipeline_id, run_id, new_hash, json.dumps(col_defs))
-        )
-        conn.commit()
-
-        if last and last[0] != new_hash:
-            sns_topic = os.environ.get("SNS_DRIFT_TOPIC_ARN")
-            if sns_topic:
-                sns.publish(
-                    TopicArn=sns_topic,
-                    Subject=f"Schema drift detected — pipeline {pipeline_id}",
-                    Message=json.dumps({
-                        "pipeline_id": pipeline_id,
-                        "run_id": run_id,
-                        "previous_hash": last[0],
-                        "new_hash": new_hash,
-                        "new_schema": col_defs,
-                    }),
-                )
-
-        # Auto-iterate for tabular mode — copy raw file BEFORE deleting it
+        # Auto-iterate copies the processed output into a new run prefix, so it is independent
+        # of the raw cleanup below. _maybe_auto_iterate already swallows its own errors.
         if auto_mode and iteration < 3:
             _maybe_auto_iterate(
                 cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
                 processed_key, iteration, profile["quality_score"]
             )
 
-        # Delete raw file AFTER auto-iterate has copied it (if applicable)
+        # Privacy: remove the raw upload AND the extracted document text (all versions).
         if auto_delete_raw:
-            try:
-                raw_bucket = os.environ["S3_RAW_BUCKET"]
-                s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
-                print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
-            except Exception as del_err:
-                print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
+            delete_raw_run_objects(s3, raw_bucket, raw_s3_key)
+
+        return {"statusCode": 200, "run_id": run_id}
 
     except Exception as e:
         conn.rollback()
+        if completed:
+            print(f"[executor] post-completion step failed for run {run_id} (run stays completed): {e}")
+            return {"statusCode": 200, "run_id": run_id, "post_completion_error": str(e)[:500]}
+        if receive_count < max_attempts:
+            # Release the claim so the SQS redelivery can retry this run.
+            cur.execute(
+                "UPDATE pipeline_runs SET status = 'queued', error_message = %s, updated_at = now() WHERE id = %s",
+                (f"Attempt {receive_count}/{max_attempts} failed, retrying: {e}"[:1000], run_id),
+            )
+            conn.commit()
+            raise
         cur.execute(
             "UPDATE pipeline_runs SET status = 'failed', error_message = %s, updated_at = now() WHERE id = %s",
-            (str(e), run_id),
+            (str(e)[:1000], run_id),
         )
         conn.commit()
-        raise
+        return {"statusCode": 200, "run_id": run_id, "failed": True}
     finally:
         cur.close()
         conn.close()
 
-    return {"statusCode": 200, "run_id": run_id}
+
+def handler(event, context):
+    """SQS entrypoint. Processes every record in the batch (review M5: only Records[0] was read).
+
+    If any record needs a retry the invocation raises, so SQS redelivers the batch; records that
+    already finished are skipped on redelivery by the conditional claim.
+    """
+    retry_errors = []
+    results = []
+    for record in event.get("Records", []):
+        run_id = json.loads(record["body"])["run_id"]
+        receive_count = int((record.get("attributes") or {}).get("ApproximateReceiveCount", "1"))
+        try:
+            results.append(process_run(run_id, receive_count))
+        except Exception as e:
+            retry_errors.append(f"{run_id}: {e}")
+    if retry_errors:
+        raise RuntimeError("executor will retry: " + "; ".join(retry_errors))
+    return results[0] if len(results) == 1 else {"statusCode": 200, "results": results}

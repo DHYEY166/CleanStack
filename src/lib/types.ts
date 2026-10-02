@@ -67,6 +67,26 @@ export interface ColumnStat {
   max?: unknown;
 }
 
+/** Written by the executor into transform_rules.parameters._execution. */
+export interface RuleExecutionResult {
+  applied: boolean;
+  reason: string | null;
+}
+
+/** Execution outcome recorded by the executor, or null if the rule has not run yet. */
+export function ruleExecution(parameters: Record<string, unknown> | null | undefined): RuleExecutionResult | null {
+  const raw = parameters?._execution;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.applied !== "boolean") return null;
+  return { applied: r.applied, reason: typeof r.reason === "string" ? r.reason : null };
+}
+
+/** An approved rule the executor skipped (it changed nothing in the output). */
+export function isApprovedButNotApplied(rule: { status: string; parameters: Record<string, unknown> | null }): boolean {
+  return rule.status === "approved" && ruleExecution(rule.parameters)?.applied === false;
+}
+
 export interface TransformRule {
   id: string;
   pipeline_id: string;

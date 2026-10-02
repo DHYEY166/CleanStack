@@ -16,6 +16,7 @@ import {
 import Nav from "@/components/Nav";
 import { queryOne, query } from "@/lib/db";
 import type { PipelineRun, DataProfile, TransformRule } from "@/lib/types";
+import { isApprovedButNotApplied, ruleExecution } from "@/lib/types";
 import QualityGauge from "@/components/QualityGauge";
 import ColumnStatsTable from "@/components/ColumnStatsTable";
 import QualityTrendChart from "@/components/QualityTrendChart";
@@ -330,6 +331,11 @@ export default async function RunDetailPage({
               </h2>
               <div className="text-sm text-gray-400">
                 <span className="text-green-400">{rules.filter((r) => r.status === "approved").length} approved</span> ·{" "}
+                {rules.some(isApprovedButNotApplied) && (
+                  <>
+                    <span className="text-amber-300">{rules.filter(isApprovedButNotApplied).length} not applied</span> ·{" "}
+                  </>
+                )}
                 <span className="text-red-400">{rules.filter((r) => r.status === "rejected").length} rejected</span> ·{" "}
                 <span className="text-yellow-400">{rules.filter((r) => r.status === "pending").length} pending</span>
               </div>
@@ -372,6 +378,11 @@ export default async function RunDetailPage({
                       </div>
                       {rule.ai_reasoning && (
                         <p className="text-gray-400 text-sm leading-relaxed">{rule.ai_reasoning}</p>
+                      )}
+                      {isApprovedButNotApplied(rule) && (
+                        <p className="mt-1.5 text-xs text-amber-300">
+                          Not applied{ruleExecution(rule.parameters)?.reason ? `: ${ruleExecution(rule.parameters)?.reason}` : ""}
+                        </p>
                       )}
                     </div>
                     <span

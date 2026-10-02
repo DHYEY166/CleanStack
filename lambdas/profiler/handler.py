@@ -27,6 +27,12 @@ secrets = boto3.client("secretsmanager")
 
 DOCUMENT_EXTENSIONS = {"pdf", "docx", "doc"}
 
+# === BEGIN SHARED QUALITY BLOCK ===
+# This block is kept identical in lambdas/profiler/handler.py and lambdas/executor/handler.py so raw and
+# processed quality scores use the same loader and formula (review M1). Each Lambda is
+# deployed as a standalone zip, so it is copied rather than imported.
+# lambdas/tests/test_quality.py fails if the two copies diverge.
+
 SENTINEL_VALUES = {
     # Explicit null markers
     "", "n/a", "na", "null", "none", "unknown", "undefined", "not available",
@@ -48,24 +54,19 @@ SENTINEL_VALUES = {
     "inf", "-inf",
 }
 
-DOMAIN_KEYWORDS = {
-    "contract":  ["agreement", "clause", "party", "whereas", "hereinafter", "indemnify", "termination", "obligations"],
-    "medical":   ["patient", "diagnosis", "prescription", "physician", "clinical", "dosage", "treatment", "symptoms"],
-    "hr":        ["employee", "salary", "compensation", "performance", "payroll", "benefits", "onboarding", "recruiter"],
-    "invoice":   ["invoice", "billing", "payment", "amount due", "vendor", "purchase order", "remittance", "net 30"],
-    "legal":     ["plaintiff", "defendant", "court", "jurisdiction", "liability", "statute", "affidavit", "counsel"],
-    "financial": ["revenue", "ebitda", "balance sheet", "fiscal", "quarterly", "dividend", "earnings", "amortization"],
-}
+def _is_text(series: pd.Series) -> bool:
+    """True for string-like columns under both pandas 2 (object) and pandas 3 (str dtype)."""
+    return series.dtype == object or isinstance(series.dtype, pd.StringDtype)
 
 
-def get_db_conn():
-    from urllib.parse import urlparse
-    url = os.environ["DATABASE_URL"]
-    p = urlparse(url)
-    host, port, user, dbname = p.hostname, p.port or 5432, p.username, p.path.lstrip("/")
-    rds = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-    token = rds.generate_db_auth_token(DBHostname=host, Port=port, DBUsername=user)
-    return psycopg2.connect(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
+def _text_cols(df: pd.DataFrame) -> list:
+    """All string-like columns (pandas 2 object and pandas 3 str dtypes)."""
+    return [c for c in df.columns if _is_text(df[c])]
+
+
+def _dtype_name(series: pd.Series) -> str:
+    """Stable dtype label across pandas versions (pandas 3 reports text columns as "str")."""
+    return "object" if _is_text(series) else str(series.dtype)
 
 
 def detect_encoding(file_bytes: bytes) -> str:
@@ -79,157 +80,10 @@ def detect_encoding(file_bytes: bytes) -> str:
         return "utf-8"
 
 
-def detect_format(key: str, content_type: str, file_bytes: bytes = b"") -> str:
-    if file_bytes:
-        magic = file_bytes[:8]
-        if magic[:4] == b'\xd0\xcf\x11\xe0':  # OLE2 compound = old .xls
-            return "xls"
-        if magic[:4] == b'PK\x03\x04':  # ZIP-based = .xlsx or .docx
-            ext = key.rsplit(".", 1)[-1].lower()
-            return ext if ext in ("xlsx", "docx") else "xlsx"
-        if magic[:4] == b'%PDF':
-            return "pdf"
-    return key.rsplit(".", 1)[-1].lower()
-
-
-def extract_text(file_bytes: bytes, fmt: str) -> str:
-    if fmt == "pdf":
-        import pdfplumber
-        parts = []
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                if tables:
-                    for table in tables:
-                        for row in table:
-                            parts.append(" | ".join(str(c) if c else "" for c in row))
-                else:
-                    text = page.extract_text()
-                    if text:
-                        parts.append(text)
-        return "\n\n".join(parts)
-    elif fmt == "docx":
-        from docx import Document
-        doc = Document(io.BytesIO(file_bytes))
-        parts = []
-        # Main body paragraphs
-        parts.extend(p.text for p in doc.paragraphs)
-        # Tables
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    parts.extend(p.text for p in cell.paragraphs)
-        # Headers and footers
-        for section in doc.sections:
-            for para in section.header.paragraphs:
-                parts.append(para.text)
-            for para in section.footer.paragraphs:
-                parts.append(para.text)
-        # Text boxes (DrawingML)
-        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-        for txbx in doc.element.findall('.//w:txbxContent//w:p', ns):
-            text = "".join(r.text or "" for r in txbx.findall('.//w:r/w:t', ns))
-            if text:
-                parts.append(text)
-        return "\n".join(p for p in parts if p)
-    else:
-        return file_bytes.decode("utf-8", errors="replace")
-
-
 def _val_pattern(val: str) -> str:
     s = re.sub(r'[A-Za-z]+', 'A', val)
     s = re.sub(r'\d+', 'N', s)
     return s
-
-
-def profile_document(text: str) -> dict:
-    lines = text.splitlines()
-    words = text.split()
-    non_blank_lines = [l for l in lines if l.strip()]
-
-    # — PII counts —
-    email_count = len(re.findall(r'[\w.+-]+@[\w-]+\.\w+', text))
-    phone_count = len(re.findall(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', text))
-    ssn_count   = len(re.findall(r'\b\d{3}-\d{2}-\d{4}\b', text))
-    cc_count    = len(re.findall(r'\b(?:\d{4}[- ]?){3}\d{4}\b', text))
-    html_tags   = len(re.findall(r'<[^>]+>', text))
-    blank_lines = sum(1 for l in lines if not l.strip())
-
-    # — Repeated lines (headers/footers) —
-    line_counts = Counter(l.strip() for l in lines if l.strip() and len(l.strip()) < 150)
-    repeated = {l: c for l, c in line_counts.items() if c >= 3}
-    repeated_examples = dict(list(sorted(repeated.items(), key=lambda x: -x[1])[:5]))
-
-    # — Line length distribution —
-    lengths = [len(l) for l in non_blank_lines]
-    avg_line_len  = round(sum(lengths) / max(len(lengths), 1), 1)
-    short_line_pct = round(sum(1 for l in lengths if l < 40) / max(len(lengths), 1) * 100, 1)
-
-    # — Encoding errors —
-    enc_errors = re.findall(r'[â€™â€œÃ©Ã¨Ã®Ã´Ã ï»¿�â]', text)
-    enc_error_examples = list({c for c in enc_errors})[:5]
-
-    # — Named entity hints —
-    person_matches = list(set(re.findall(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', text)))
-    org_matches    = list(set(re.findall(
-        r'\b[A-Z][A-Za-z\s]{2,30}(?:Inc|LLC|Ltd|LLP|Corp|Co|Company|Group|Holdings|Technologies|Solutions)\b', text
-    )))
-
-    # — Domain inference —
-    text_lower = text.lower()
-    domain_scores = {d: sum(text_lower.count(k) for k in kws) for d, kws in DOMAIN_KEYWORDS.items()}
-    best_domain = max(domain_scores, key=domain_scores.get)
-    domain_confidence = domain_scores[best_domain]
-    inferred_domain = best_domain if domain_confidence >= 2 else "general"
-
-    # — Quality score —
-    pii_count      = email_count + phone_count + ssn_count + cc_count
-    pii_penalty    = min(pii_count * 5, 40)
-    html_penalty   = min(html_tags * 0.5, 20)
-    blank_penalty  = min(blank_lines / max(len(lines), 1) * 100 * 0.3, 20)
-    ner_penalty    = min(len(person_matches) * 1.5, 15)
-    enc_penalty    = min(len(enc_errors) * 0.5, 10)
-    header_penalty = min(len(repeated) * 1.0, 10)
-    quality_score  = max(0, round(100 - pii_penalty - html_penalty - blank_penalty
-                                  - ner_penalty - enc_penalty - header_penalty))
-
-    mid = len(text) // 2
-    doc_stats = {
-        "word_count":             len(words),
-        "char_count":             len(text),
-        "blank_line_count":       blank_lines,
-        "avg_line_length":        avg_line_len,
-        "short_line_pct":         short_line_pct,
-        "pii_detected": {
-            "emails":       email_count,
-            "phones":       phone_count,
-            "ssns":         ssn_count,
-            "credit_cards": cc_count,
-        },
-        "html_tag_count":         html_tags,
-        "repeated_line_count":    len(repeated),
-        "repeated_line_examples": repeated_examples,
-        "encoding_error_count":   len(enc_errors),
-        "encoding_error_examples": enc_error_examples,
-        "person_name_count":      len(person_matches),
-        "person_name_examples":   person_matches[:5],
-        "org_count":              len(org_matches),
-        "org_examples":           org_matches[:3],
-        "inferred_domain":        inferred_domain,
-        "domain_confidence":      domain_confidence,
-        "sample_text":            text[:2000],
-        "mid_sample_text":        text[mid: mid + 500],
-    }
-
-    return {
-        "quality_score":        quality_score,
-        "total_rows":           len(lines),
-        "null_percentage":      0.0,
-        "duplicate_percentage": 0.0,
-        "type_mismatch_count":  0,
-        "outlier_count":        0,
-        "column_stats":         doc_stats,
-    }
 
 
 def load_dataframe(file_bytes: bytes, fmt: str) -> pd.DataFrame:
@@ -323,7 +177,7 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
     # keep_default_na=False: empty cells are "" not NaN — exclude them before type-mismatch check
     type_mismatches = 0
     for col in df.columns:
-        if df[col].dtype == object:
+        if _is_text(df[col]):
             non_empty = df[col][df[col].astype(str).str.strip() != ""]
             numeric_count = pd.to_numeric(non_empty, errors="coerce").notna().sum()
             if 0 < numeric_count < len(non_empty):
@@ -332,7 +186,7 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
     # dtype=str: coerce object cols to numeric before outlier detection
     outlier_count = 0
     for col in df.columns:
-        _num = pd.to_numeric(df[col], errors="coerce") if df[col].dtype == object else df[col]
+        _num = pd.to_numeric(df[col], errors="coerce") if _is_text(df[col]) else df[col]
         if _num.notna().sum() < max(len(_num) * 0.5, 2):
             continue
         q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
@@ -350,7 +204,7 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
         n = len(series)
 
         col_stat: dict = {
-            "type":         str(series.dtype),
+            "type":         _dtype_name(series),
             "null_count":   int(series.isnull().sum()),
             "null_pct":     round(series.isnull().mean() * 100, 2),
             "unique_count": int(series.nunique()),
@@ -371,7 +225,7 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
                 outliers = _num_series[(_num_series < q1 - 1.5 * iqr) | (_num_series > q3 + 1.5 * iqr)]
                 col_stat["outlier_examples"] = [float(v) for v in outliers.head(3).tolist()]
 
-        if series.dtype == object:
+        if _is_text(series):
             str_series = series.astype(str).str.strip().str.lower()
 
             # Sentinel detection
@@ -407,7 +261,7 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
         column_stats[str(col)] = col_stat
 
     # Dataset-level sentinel pct
-    total_object_cells = int(df.select_dtypes(include="object").size) or 1
+    total_object_cells = int(len(df) * len(_text_cols(df))) or 1
     sentinel_pct_overall = round(total_sentinel_count / total_object_cells * 100, 2)
 
     # Penalties
@@ -432,6 +286,175 @@ def compute_quality_score(df: pd.DataFrame) -> dict:
         "column_stats":           column_stats,
     }
 
+# === END SHARED QUALITY BLOCK ===
+
+
+DOMAIN_KEYWORDS = {
+    "contract":  ["agreement", "clause", "party", "whereas", "hereinafter", "indemnify", "termination", "obligations"],
+    "medical":   ["patient", "diagnosis", "prescription", "physician", "clinical", "dosage", "treatment", "symptoms"],
+    "hr":        ["employee", "salary", "compensation", "performance", "payroll", "benefits", "onboarding", "recruiter"],
+    "invoice":   ["invoice", "billing", "payment", "amount due", "vendor", "purchase order", "remittance", "net 30"],
+    "legal":     ["plaintiff", "defendant", "court", "jurisdiction", "liability", "statute", "affidavit", "counsel"],
+    "financial": ["revenue", "ebitda", "balance sheet", "fiscal", "quarterly", "dividend", "earnings", "amortization"],
+}
+
+
+def get_db_conn():
+    from urllib.parse import urlparse
+    url = os.environ["DATABASE_URL"]
+    p = urlparse(url)
+    host, port, user, dbname = p.hostname, p.port or 5432, p.username, p.path.lstrip("/")
+    rds = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+    token = rds.generate_db_auth_token(DBHostname=host, Port=port, DBUsername=user)
+    return psycopg2.connect(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
+
+
+def detect_format(key: str, content_type: str, file_bytes: bytes = b"") -> str:
+    if file_bytes:
+        magic = file_bytes[:8]
+        if magic[:4] == b'\xd0\xcf\x11\xe0':  # OLE2 compound = old .xls
+            return "xls"
+        if magic[:4] == b'PK\x03\x04':  # ZIP-based = .xlsx or .docx
+            ext = key.rsplit(".", 1)[-1].lower()
+            return ext if ext in ("xlsx", "docx") else "xlsx"
+        if magic[:4] == b'%PDF':
+            return "pdf"
+    return key.rsplit(".", 1)[-1].lower()
+
+
+def extract_text(file_bytes: bytes, fmt: str) -> str:
+    if fmt == "pdf":
+        import pdfplumber
+        parts = []
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        for row in table:
+                            parts.append(" | ".join(str(c) if c else "" for c in row))
+                else:
+                    text = page.extract_text()
+                    if text:
+                        parts.append(text)
+        return "\n\n".join(parts)
+    elif fmt == "docx":
+        from docx import Document
+        doc = Document(io.BytesIO(file_bytes))
+        parts = []
+        # Main body paragraphs
+        parts.extend(p.text for p in doc.paragraphs)
+        # Tables
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    parts.extend(p.text for p in cell.paragraphs)
+        # Headers and footers
+        for section in doc.sections:
+            for para in section.header.paragraphs:
+                parts.append(para.text)
+            for para in section.footer.paragraphs:
+                parts.append(para.text)
+        # Text boxes (DrawingML)
+        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        for txbx in doc.element.findall('.//w:txbxContent//w:p', ns):
+            text = "".join(r.text or "" for r in txbx.findall('.//w:r/w:t', ns))
+            if text:
+                parts.append(text)
+        return "\n".join(p for p in parts if p)
+    else:
+        return file_bytes.decode("utf-8", errors="replace")
+
+
+def profile_document(text: str) -> dict:
+    lines = text.splitlines()
+    words = text.split()
+    non_blank_lines = [l for l in lines if l.strip()]
+
+    # — PII counts —
+    email_count = len(re.findall(r'[\w.+-]+@[\w-]+\.\w+', text))
+    phone_count = len(re.findall(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', text))
+    ssn_count   = len(re.findall(r'\b\d{3}-\d{2}-\d{4}\b', text))
+    cc_count    = len(re.findall(r'\b(?:\d{4}[- ]?){3}\d{4}\b', text))
+    html_tags   = len(re.findall(r'<[^>]+>', text))
+    blank_lines = sum(1 for l in lines if not l.strip())
+
+    # — Repeated lines (headers/footers) —
+    line_counts = Counter(l.strip() for l in lines if l.strip() and len(l.strip()) < 150)
+    repeated = {l: c for l, c in line_counts.items() if c >= 3}
+    repeated_examples = dict(list(sorted(repeated.items(), key=lambda x: -x[1])[:5]))
+
+    # — Line length distribution —
+    lengths = [len(l) for l in non_blank_lines]
+    avg_line_len  = round(sum(lengths) / max(len(lengths), 1), 1)
+    short_line_pct = round(sum(1 for l in lengths if l < 40) / max(len(lengths), 1) * 100, 1)
+
+    # — Encoding errors —
+    enc_errors = re.findall(r'[â€™â€œÃ©Ã¨Ã®Ã´Ã ï»¿�â]', text)
+    enc_error_examples = list({c for c in enc_errors})[:5]
+
+    # — Named entity hints —
+    person_matches = list(set(re.findall(r'\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b', text)))
+    org_matches    = list(set(re.findall(
+        r'\b[A-Z][A-Za-z\s]{2,30}(?:Inc|LLC|Ltd|LLP|Corp|Co|Company|Group|Holdings|Technologies|Solutions)\b', text
+    )))
+
+    # — Domain inference —
+    text_lower = text.lower()
+    domain_scores = {d: sum(text_lower.count(k) for k in kws) for d, kws in DOMAIN_KEYWORDS.items()}
+    best_domain = max(domain_scores, key=domain_scores.get)
+    domain_confidence = domain_scores[best_domain]
+    inferred_domain = best_domain if domain_confidence >= 2 else "general"
+
+    # — Quality score —
+    pii_count      = email_count + phone_count + ssn_count + cc_count
+    pii_penalty    = min(pii_count * 5, 40)
+    html_penalty   = min(html_tags * 0.5, 20)
+    blank_penalty  = min(blank_lines / max(len(lines), 1) * 100 * 0.3, 20)
+    ner_penalty    = min(len(person_matches) * 1.5, 15)
+    enc_penalty    = min(len(enc_errors) * 0.5, 10)
+    header_penalty = min(len(repeated) * 1.0, 10)
+    quality_score  = max(0, round(100 - pii_penalty - html_penalty - blank_penalty
+                                  - ner_penalty - enc_penalty - header_penalty))
+
+    mid = len(text) // 2
+    doc_stats = {
+        "word_count":             len(words),
+        "char_count":             len(text),
+        "blank_line_count":       blank_lines,
+        "avg_line_length":        avg_line_len,
+        "short_line_pct":         short_line_pct,
+        "pii_detected": {
+            "emails":       email_count,
+            "phones":       phone_count,
+            "ssns":         ssn_count,
+            "credit_cards": cc_count,
+        },
+        "html_tag_count":         html_tags,
+        "repeated_line_count":    len(repeated),
+        "repeated_line_examples": repeated_examples,
+        "encoding_error_count":   len(enc_errors),
+        "encoding_error_examples": enc_error_examples,
+        "person_name_count":      len(person_matches),
+        "person_name_examples":   person_matches[:5],
+        "org_count":              len(org_matches),
+        "org_examples":           org_matches[:3],
+        "inferred_domain":        inferred_domain,
+        "domain_confidence":      domain_confidence,
+        "sample_text":            text[:2000],
+        "mid_sample_text":        text[mid: mid + 500],
+    }
+
+    return {
+        "quality_score":        quality_score,
+        "total_rows":           len(lines),
+        "null_percentage":      0.0,
+        "duplicate_percentage": 0.0,
+        "type_mismatch_count":  0,
+        "outlier_count":        0,
+        "column_stats":         doc_stats,
+    }
+
 
 def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     """Detect dataset signals for gate-controlled rule suggestion in suggest-transforms."""
@@ -451,7 +474,7 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
         null_pct = _effective_null_pct(df[col])
         if 0.01 < null_pct < 0.60:
             ffill_cols.append(col)
-    for col in df.select_dtypes(include="object").columns:
+    for col in _text_cols(df):
         if col in ffill_cols:
             continue
         null_pct = _effective_null_pct(df[col])
@@ -467,7 +490,7 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     OUTLIER_MIN_ROWS = 3  # at least 3 outlier rows required — prevents single-point noise firing the gate
     outlier_cols = []
     for col in df.columns:
-        _num = pd.to_numeric(df[col], errors="coerce") if df[col].dtype == object else df[col]
+        _num = pd.to_numeric(df[col], errors="coerce") if _is_text(df[col]) else df[col]
         if _num.notna().sum() < max(len(_num) * 0.5, 2):
             continue
         q1, q3 = _num.quantile(0.25), _num.quantile(0.75)
@@ -483,8 +506,8 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     # ── boolean columns ───────────────────────────────────────────────────────
     BOOL_VALUES = {"true", "false", "yes", "no", "1", "0", "t", "f", "y", "n", "on", "off"}
     bool_cols = []
-    for col in df.select_dtypes(include="object").columns:
-        vals = set(df[col].dropna().str.lower().unique()) if hasattr(df[col], 'str') else set()
+    for col in _text_cols(df):
+        vals = set(df[col].dropna().astype(str).str.lower().unique())
         if vals and vals.issubset(BOOL_VALUES) and len(vals) <= 4:
             bool_cols.append(col)
     signals["has_boolean_column"] = len(bool_cols) > 0
@@ -495,11 +518,11 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     CURRENCY_SYMBOLS = {"$", "€", "£", "¥", "₹", "₩", "CHF", "CAD", "AUD"}
     currency_cols = []
     all_symbols_found: set = set()
-    for col in df.select_dtypes(include="object").columns:
+    for col in _text_cols(df):
         sample = df[col].dropna().head(100).astype(str)
         symbols = set()
         for sym in CURRENCY_SYMBOLS:
-            if sample.str.contains(re.escape(sym), regex=False).any():
+            if sample.str.contains(sym, regex=False).any():  # literal match; re.escape here broke "$"
                 symbols.add(sym)
         if len(symbols) >= 2:
             currency_cols.append(col)
@@ -513,10 +536,10 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     SPLIT_DELIMITERS = ["|", ";", "::", " - ", "/", "\\"]
     split_cols = []
     split_delimiters: dict = {}
-    for col in df.select_dtypes(include="object").columns:
+    for col in _text_cols(df):
         sample = df[col].dropna().head(100).astype(str)
         for delim in SPLIT_DELIMITERS:
-            if sample.str.contains(re.escape(delim), regex=False).mean() > 0.70:
+            if sample.str.contains(delim, regex=False).mean() > 0.70:
                 split_cols.append(col)
                 split_delimiters[col] = delim
                 break
@@ -536,7 +559,7 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
 
     # ── numeric locale (European: 1.234,56 format) ────────────────────────────
     locale_cols = []
-    for col in df.select_dtypes(include="object").columns:
+    for col in _text_cols(df):
         sample = df[col].dropna().head(50).astype(str)
         if sample.str.match(r'^\d{1,3}(\.\d{3})+(,\d+)?$').mean() > 0.5:
             locale_cols.append(col)

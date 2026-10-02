@@ -1,23 +1,24 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { queryOneWithTeam } from "@/lib/db";
+import {
+  DOWNLOAD_URL_TTL_SECONDS,
+  attachmentDisposition,
+  describeDeliverable,
+} from "@/lib/download";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
-const MIME: Record<string, { contentType: string; ext: string }> = {
-  csv:  { contentType: "text/csv",                                                          ext: "csv"  },
-  txt:  { contentType: "text/plain",                                                         ext: "txt"  },
-  tsv:  { contentType: "text/tab-separated-values",                                         ext: "tsv"  },
-  json: { contentType: "application/json",                                                  ext: "json" },
-  jsonl:{ contentType: "application/x-ndjson",                                              ext: "jsonl"},
-  xlsx: { contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" },
-  xls:  { contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" },
-  xml:  { contentType: "application/xml",                                                   ext: "xml"  },
-  pdf:  { contentType: "application/pdf",                                                                                   ext: "pdf"  },
-  docx: { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",                          ext: "docx" },
-};
-
+/**
+ * Returns a short-lived presigned S3 URL for a completed run's deliverable.
+ *
+ * The executor writes a clean `output.<ext>` (audit `__orig_*` columns go to a
+ * separate `audit.csv`), so the bytes are served exactly as stored: no
+ * re-parsing or column stripping here, and no proxying of large files through
+ * the serverless function.
+ */
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ runId: string }> }
@@ -41,51 +42,28 @@ export async function GET(
       return NextResponse.json({ error: "No processed file found" }, { status: 404 });
     }
 
-    const obj = await s3.send(
-      new GetObjectCommand({
-        Bucket: process.env.S3_PROCESSED_BUCKET!,
-        Key: run.processed_s3_key,
-      })
-    );
-
-    const chunks: Uint8Array[] = [];
-    const stream = obj.Body as AsyncIterable<Uint8Array>;
-    for await (const chunk of stream) chunks.push(chunk);
-    let fileBytes = Buffer.concat(chunks);
-
-    const fmt = run.file_format ?? "csv";
-
-    // Strip __orig_* audit columns from CSV/TSV before delivering to user
-    if (fmt === "csv" || fmt === "tsv") {
-      const sep = fmt === "tsv" ? "\t" : ",";
-      const text = fileBytes.toString("utf-8");
-      const lines = text.split("\n");
-      if (lines.length > 0) {
-        const headers = lines[0].split(sep);
-        const keepIdx = headers
-          .map((h, i) => ({ h: h.replace(/^"|"$/g, ""), i }))
-          .filter(({ h }) => !h.startsWith("__orig_"))
-          .map(({ i }) => i);
-        if (keepIdx.length < headers.length) {
-          const cleaned = lines.map((line) => {
-            if (!line.trim()) return line;
-            const cells = line.split(sep);
-            return keepIdx.map((i) => cells[i] ?? "").join(sep);
-          });
-          fileBytes = Buffer.from(cleaned.join("\n"), "utf-8");
-        }
-      }
+    const bucket = process.env.S3_PROCESSED_BUCKET;
+    if (!bucket) {
+      console.error("[GET /api/download] S3_PROCESSED_BUCKET is not set");
+      return NextResponse.json({ error: "Internal server error" }, { status: 500 });
     }
 
-    const mime = MIME[fmt] ?? MIME["csv"];
+    const d = describeDeliverable(runId, run.processed_s3_key, run.file_format);
+    const url = await getSignedUrl(
+      s3,
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: run.processed_s3_key,
+        ResponseContentDisposition: attachmentDisposition(d.filename),
+        ResponseContentType: d.contentType,
+      }),
+      { expiresIn: DOWNLOAD_URL_TTL_SECONDS }
+    );
 
-    return new NextResponse(fileBytes, {
-      headers: {
-        "Content-Type": mime.contentType,
-        "Content-Disposition": `attachment; filename="cleanstack_${runId.slice(0, 8)}.${mime.ext}"`,
-        "Cache-Control": "no-store",
-      },
-    });
+    return NextResponse.json(
+      { url, filename: d.filename, format: d.format, expiresIn: DOWNLOAD_URL_TTL_SECONDS },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (err) {
     console.error("[GET /api/download]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
