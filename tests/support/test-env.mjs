@@ -33,6 +33,8 @@ export const TEST_ENV_DEFAULTS = {
   APP_URL: "http://localhost:3000",
   WEBHOOK_SECRET: "test-webhook-secret-0123456789abcdef0123",
   CRON_SECRET: "test-cron-secret-0123456789abcdef01234567",
+  // Enables guest access (src/lib/guest.ts) in the suites.
+  GUEST_COOKIE_SECRET: "test-guest-cookie-secret-0123456789abcdef",
   // Never used with DB_DRIVER=pg; set so requireEnv-style config checks pass.
   AURORA_CLUSTER_ARN: "arn:aws:rds:us-east-1:000000000000:cluster:unused-in-tests",
   AURORA_SECRET_ARN: "arn:aws:secretsmanager:us-east-1:000000000000:secret:unused-in-tests",

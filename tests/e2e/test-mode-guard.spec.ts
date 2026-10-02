@@ -30,5 +30,13 @@ for (const { name, url } of servers) {
         expect([401, 403, 404], `${path} -> ${res.status()}`).toContain(res.status());
       }
     });
+
+    test("a forged cs_guest cookie is not a session", async ({ request }) => {
+      const headers = { cookie: "cs_guest=guest_AAAAAAAAAAAAAAAAAAAAAA.9999999999.forged" };
+      for (const path of ["/api/usage", "/api/pipelines", "/dashboard"]) {
+        const res = await request.get(`${url}${path}`, { headers, maxRedirects: 0 });
+        expect([401, 403, 404], `${path} -> ${res.status()}`).toContain(res.status());
+      }
+    });
   });
 }

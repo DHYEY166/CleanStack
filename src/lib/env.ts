@@ -57,6 +57,10 @@ export const ENV_SPEC = {
   UPSTASH_REDIS_REST_TOKEN: { validate: nonEmpty, required: false, description: "Upstash Redis token" },
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: { validate: nonEmpty, required: true, description: "Clerk publishable key (read by @clerk/nextjs)" },
   CLERK_SECRET_KEY: { validate: nonEmpty, required: true, description: "Clerk secret key (read by @clerk/nextjs)" },
+  GUEST_COOKIE_SECRET: { validate: nonEmpty, required: false, description: "Signs guest session cookies (src/lib/guest.ts); guest access is OFF when unset or shorter than 32 chars" },
+  TURNSTILE_SECRET_KEY: { validate: nonEmpty, required: false, description: "Cloudflare Turnstile secret; when set, starting a guest session requires a Turnstile token" },
+  NEXT_PUBLIC_TURNSTILE_SITE_KEY: { validate: nonEmpty, required: false, description: "Cloudflare Turnstile site key for the guest button widget (set with TURNSTILE_SECRET_KEY)" },
+  MAX_UPLOAD_MB: { validate: (v) => (Number(v) > 0 ? null : "must be a positive number"), required: false, description: "Per-file upload limit for signed-in users in MB (default 100; guests 2). Keep in sync with the profiler Lambda's MAX_UPLOAD_MB" },
   LOG_LEVEL: { validate: (v) => (["debug", "info", "warn", "error"].includes(v) ? null : "must be debug|info|warn|error"), required: false, description: "Structured logger threshold (default info)" },
   // Test-only (honoured only when src/lib/test-mode.ts isTestMode() is true)
   CLEANSTACK_TEST_MODE: { validate: (v) => (v === "1" || v === "0" ? null : 'must be "1" or "0"'), required: false, description: "TEST ONLY: enables the test-only switches; ignored on Vercel/Lambda" },
@@ -140,6 +144,13 @@ export function checkEnv(source: EnvSource = process.env): EnvReport {
   }
   if (read("AI_QUEUE_ENABLED", source) === "true" && read("AI_JOBS_QUEUE_URL", source) === undefined) {
     errors.push("AI_JOBS_QUEUE_URL is not set but AI_QUEUE_ENABLED=true");
+  }
+  const guestSecretValue = read("GUEST_COOKIE_SECRET", source);
+  if (guestSecretValue !== undefined && guestSecretValue.length < 32) {
+    errors.push("GUEST_COOKIE_SECRET is shorter than 32 characters; guest access stays OFF");
+  }
+  if ((read("TURNSTILE_SECRET_KEY", source) === undefined) !== (read("NEXT_PUBLIC_TURNSTILE_SITE_KEY", source) === undefined)) {
+    warnings.push("TURNSTILE_SECRET_KEY and NEXT_PUBLIC_TURNSTILE_SITE_KEY must be set together");
   }
   const hasRedisUrl = read("UPSTASH_REDIS_REST_URL", source) !== undefined;
   const hasRedisToken = read("UPSTASH_REDIS_REST_TOKEN", source) !== undefined;

@@ -16,8 +16,13 @@ vi.mock("@clerk/nextjs/server", () => ({
 }));
 
 import { auth, currentUserEmail, isValidTestUserId, TEST_USER_COOKIE, userEmailById } from "@/lib/auth";
+import { GUEST_COOKIE, signGuestToken } from "@/lib/guest";
 
-const ENV_KEYS = ["CLEANSTACK_TEST_MODE", "VERCEL", "AWS_LAMBDA_FUNCTION_NAME"] as const;
+const ENV_KEYS = ["CLEANSTACK_TEST_MODE", "VERCEL", "AWS_LAMBDA_FUNCTION_NAME", "GUEST_COOKIE_SECRET"] as const;
+const GUEST_SECRET = "unit-test-guest-secret-0123456789abcdef";
+const GUEST = "guest_AAAAAAAAAAAAAAAAAAAAAA";
+const guestCookie = (secret = GUEST_SECRET, expiresAt = Math.floor(Date.now() / 1000) + 3600) =>
+  signGuestToken({ guestId: GUEST, expiresAt }, secret);
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -75,6 +80,44 @@ describe("auth facade, test mode", () => {
     expect(await userEmailById("user_test_bob")).toBe("user_test_bob@e2e.cleanstack.test");
     expect(await userEmailById("user_real")).toBeNull();
     expect(clerk.getUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("auth facade, guests", () => {
+  beforeEach(() => { clerk.auth.mockResolvedValue({ userId: null } as never); });
+  afterEach(() => { clerk.auth.mockResolvedValue({ userId: "user_clerk_1" }); });
+
+  it("a valid signed guest cookie is the session when there is no Clerk user", async () => {
+    process.env.GUEST_COOKIE_SECRET = GUEST_SECRET;
+    cookieStore.set(GUEST_COOKIE, await guestCookie());
+    expect(await auth()).toEqual({ userId: GUEST });
+    expect(await userEmailById(GUEST)).toBeNull();
+    expect(clerk.getUser).not.toHaveBeenCalled();
+  });
+
+  it("a Clerk user wins over a guest cookie", async () => {
+    process.env.GUEST_COOKIE_SECRET = GUEST_SECRET;
+    clerk.auth.mockResolvedValue({ userId: "user_clerk_1" });
+    cookieStore.set(GUEST_COOKIE, await guestCookie());
+    expect(await auth()).toEqual({ userId: "user_clerk_1" });
+  });
+
+  it("ignores guest cookies when guest access is off, forged, or expired", async () => {
+    cookieStore.set(GUEST_COOKIE, await guestCookie());
+    expect(await auth()).toEqual({ userId: null }); // GUEST_COOKIE_SECRET unset
+    process.env.GUEST_COOKIE_SECRET = GUEST_SECRET;
+    cookieStore.set(GUEST_COOKIE, await guestCookie("another-secret-0123456789abcdef0123456"));
+    expect(await auth()).toEqual({ userId: null });
+    cookieStore.set(GUEST_COOKIE, await guestCookie(GUEST_SECRET, Math.floor(Date.now() / 1000) - 1));
+    expect(await auth()).toEqual({ userId: null });
+  });
+
+  it("test mode accepts a guest cookie too", async () => {
+    process.env.CLEANSTACK_TEST_MODE = "1";
+    process.env.GUEST_COOKIE_SECRET = GUEST_SECRET;
+    cookieStore.set(GUEST_COOKIE, await guestCookie());
+    expect(await auth()).toEqual({ userId: GUEST });
+    expect(await currentUserEmail()).toBeNull();
   });
 });
 
