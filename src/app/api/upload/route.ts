@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth, currentUserEmail } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -40,8 +40,7 @@ export async function POST(req: NextRequest) {
   const rateLimitRes = await checkRateLimit(uploadLimiter, userId);
   if (rateLimitRes) return rateLimitRes;
 
-  const user = await currentUser();
-  const email = user?.primaryEmailAddress?.emailAddress ?? null;
+  const email = await currentUserEmail();
 
   const quota = await getCachedQuota(userId, email, userId);
   if (quota.blocked) {

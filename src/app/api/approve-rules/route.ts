@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne, queryOneWithTeam, withTransaction } from "@/lib/db";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";

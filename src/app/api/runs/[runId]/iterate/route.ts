@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, CopyObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";

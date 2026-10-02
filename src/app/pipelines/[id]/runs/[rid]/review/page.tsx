@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
 import { queryOne, query } from "@/lib/db";
 import type { PipelineRun, TransformRule } from "@/lib/types";

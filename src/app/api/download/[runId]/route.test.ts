@@ -5,7 +5,7 @@ const queryOneWithTeam = vi.fn();
 const getSignedUrl = vi.fn();
 const send = vi.fn();
 
-vi.mock("@clerk/nextjs/server", () => ({ auth: () => auth() }));
+vi.mock("@/lib/auth", () => ({ auth: () => auth() }));
 vi.mock("@/lib/db", () => ({ queryOneWithTeam: (...a: unknown[]) => queryOneWithTeam(...a) }));
 vi.mock("@aws-sdk/s3-request-presigner", () => ({
   getSignedUrl: (...a: unknown[]) => getSignedUrl(...a),

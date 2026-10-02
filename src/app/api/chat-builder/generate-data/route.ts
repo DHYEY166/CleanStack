@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@clerk/nextjs/server";
+import { auth } from "@/lib/auth";
 import { generateText } from "ai";
 import { bedrock } from "@ai-sdk/amazon-bedrock";
 import { BEDROCK_MODEL_ID } from "@/lib/ai-config";

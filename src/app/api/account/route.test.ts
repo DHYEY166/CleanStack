@@ -7,7 +7,7 @@ const queryOne = vi.fn();
 const withTransaction = vi.fn();
 const purgePrefix = vi.fn();
 
-vi.mock("@clerk/nextjs/server", () => ({ auth: () => auth() }));
+vi.mock("@/lib/auth", () => ({ auth: () => auth() }));
 vi.mock("@/lib/db", () => ({
   query: (...a: unknown[]) => query(...a),
   queryOne: (...a: unknown[]) => queryOne(...a),
