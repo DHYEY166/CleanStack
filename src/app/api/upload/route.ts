@@ -29,42 +29,77 @@ const EXT_CONTENT_TYPES: Record<string, string> = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
+type Stage = "auth" | "rate_limit" | "user_email" | "quota" | "parse_body" | "lookup_pipeline" | "create_run" | "presign";
+
+const STAGE_MESSAGES: Record<Stage, string> = {
+  auth: "Could not verify your session.",
+  rate_limit: "Could not check the upload rate limit.",
+  user_email: "Could not load your account.",
+  quota: "Could not check your monthly usage quota.",
+  parse_body: "Could not read the request.",
+  lookup_pipeline: "Could not load the pipeline.",
+  create_run: "Could not create the pipeline run.",
+  presign: "Could not prepare the file upload.",
+};
+
+/**
+ * Creates a pending run and returns a presigned S3 PUT URL for the raw file.
+ *
+ * Every step runs inside one try/catch. Previously auth, rate limiting, the
+ * Clerk email lookup and the quota query ran outside it, so any throw there
+ * escaped the handler and Next.js answered 500 with an EMPTY body, which the
+ * browser reported as "Unexpected end of JSON input". In production that
+ * throw was the Upstash rate limiter failing DNS; see checkRateLimit.
+ */
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const rateLimitRes = await checkRateLimit(uploadLimiter, userId);
-  if (rateLimitRes) return rateLimitRes;
-
-  const user = await currentUser();
-  const email = user?.primaryEmailAddress?.emailAddress ?? null;
-
-  const quota = await getCachedQuota(userId, email, userId);
-  if (quota.blocked) {
-    return NextResponse.json(
-      {
-        error: `Monthly row limit reached (${quota.used.toLocaleString()} / ${quota.includedRows.toLocaleString()} rows on ${quota.plan} plan). Upgrade at /pricing to continue.`,
-      },
-      { status: 402 }
-    );
-  }
-
-  const body = await req.json();
-  const { pipeline_id, filename } = body;
-
-  if (!pipeline_id || !filename) {
-    return NextResponse.json({ error: "pipeline_id and filename required" }, { status: 400 });
-  }
-
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 400 });
-  }
-
-  // Derive content_type server-side — never trust client-supplied value
-  const content_type = EXT_CONTENT_TYPES[ext] ?? "application/octet-stream";
-
+  let stage: Stage = "auth";
   try {
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    // checkRateLimit never throws: an unreachable Upstash fails open (logged).
+    stage = "rate_limit";
+    const rateLimitRes = await checkRateLimit(uploadLimiter, userId);
+    if (rateLimitRes) return rateLimitRes;
+
+    // The email only feeds the admin bypass; without it the user is treated as a normal user.
+    stage = "user_email";
+    let email: string | null = null;
+    try {
+      const user = await currentUser();
+      email = user?.primaryEmailAddress?.emailAddress ?? null;
+    } catch (err) {
+      console.warn("[POST /api/upload] could not load the user's email; admin bypass not applied", err);
+    }
+
+    stage = "quota";
+    const quota = await getCachedQuota(userId, email, userId);
+    if (quota.blocked) {
+      return NextResponse.json(
+        {
+          error: `Monthly row limit reached (${quota.used.toLocaleString()} / ${quota.includedRows.toLocaleString()} rows on ${quota.plan} plan). Upgrade at /pricing to continue.`,
+        },
+        { status: 402 }
+      );
+    }
+
+    stage = "parse_body";
+    const body = await req.json().catch(() => null);
+    const { pipeline_id, filename } = (body ?? {}) as { pipeline_id?: string; filename?: string };
+
+    if (!pipeline_id || !filename) {
+      return NextResponse.json({ error: "pipeline_id and filename required" }, { status: 400 });
+    }
+
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    if (!ALLOWED_EXTENSIONS.has(ext)) {
+      return NextResponse.json({ error: `Unsupported file type: .${ext}` }, { status: 400 });
+    }
+
+    // Derive content_type server-side — never trust client-supplied value
+    const content_type = EXT_CONTENT_TYPES[ext] ?? "application/octet-stream";
+
+    stage = "lookup_pipeline";
     const pipeline = await queryOneWithTeam<{ id: string }>(
       userId,
       "SELECT id FROM pipelines WHERE id = $1 AND team_id = $2",
@@ -72,6 +107,7 @@ export async function POST(req: NextRequest) {
     );
     if (!pipeline) return NextResponse.json({ error: "Pipeline not found" }, { status: 404 });
 
+    stage = "create_run";
     const runId = randomUUID();
     const s3Key = `${userId}/${pipeline_id}/${runId}/raw.${ext}`;
 
@@ -84,6 +120,7 @@ export async function POST(req: NextRequest) {
 
     if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
 
+    stage = "presign";
     const command = new PutObjectCommand({
       Bucket: process.env.S3_RAW_BUCKET,
       Key: s3Key,
@@ -94,7 +131,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
   } catch (err) {
-    console.error("[POST /api/upload]", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    console.error(`[POST /api/upload] failed at stage ${stage}`, err);
+    return NextResponse.json(
+      { error: `Upload could not be started: ${STAGE_MESSAGES[stage]} Please retry.`, stage },
+      { status: stage === "quota" || stage === "auth" ? 503 : 500 }
+    );
   }
 }
