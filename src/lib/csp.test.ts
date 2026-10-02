@@ -30,4 +30,12 @@ describe("buildCsp", () => {
     expect(csp).toContain("http://*.s3.localhost.localstack.cloud:4566");
     expect(csp).not.toContain("upgrade-insecure-requests");
   });
+
+  it("allows Cloudflare Turnstile only when its site key is set", () => {
+    const csp = buildCsp({ NEXT_PUBLIC_TURNSTILE_SITE_KEY: "0x4AAAAAAA" });
+    expect(csp).toContain("frame-src https://challenges.cloudflare.com");
+    expect(csp).toMatch(/script-src [^;]* https:\/\/challenges\.cloudflare\.com(;|$)/);
+    expect(csp.replace(" https://challenges.cloudflare.com", "").replace("frame-src https://challenges.cloudflare.com", "frame-src 'none'")).toBe(PRODUCTION_CSP);
+    expect(buildCsp({})).not.toContain("cloudflare");
+  });
 });

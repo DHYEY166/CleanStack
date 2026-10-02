@@ -6,6 +6,10 @@
  * and S3/SQS in us-east-1. 'unsafe-inline' is required for Next.js inline
  * scripts and Clerk; a nonce-based CSP needs per-request nonces (follow-up).
  *
+ * Cloudflare Turnstile (guest sign-in, src/components/Guest.tsx) adds
+ * https://challenges.cloudflare.com to script-src and frame-src, only when
+ * NEXT_PUBLIC_TURNSTILE_SITE_KEY is set at build time.
+ *
  * TEST MODE ONLY (src/lib/test-mode.ts, evaluated against the build env): the
  * browser talks to LocalStack over plain http, so connect-src also allows the
  * LocalStack S3 origins and `upgrade-insecure-requests` is dropped. A build
@@ -20,8 +24,11 @@ export const LOCALSTACK_CONNECT_SRC = [
   "http://*.s3.localhost.localstack.cloud:4566",
 ];
 
+export const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
+
 export function buildCsp(env: EnvSource = process.env): string {
   const test = isTestMode(env);
+  const turnstile = !!env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
   const connectSrc = [
     "'self'",
     "https://*.sentry.io",
@@ -36,12 +43,12 @@ export function buildCsp(env: EnvSource = process.env): string {
   ];
   return [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://clerk.com https://*.clerk.accounts.dev https://js.sentry-cdn.com https://*.sentry.io",
+    `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://clerk.com https://*.clerk.accounts.dev https://js.sentry-cdn.com https://*.sentry.io${turnstile ? ` ${TURNSTILE_ORIGIN}` : ""}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data: blob: https:",
     `connect-src ${connectSrc.join(" ")}`,
-    "frame-src 'none'",
+    turnstile ? `frame-src ${TURNSTILE_ORIGIN}` : "frame-src 'none'",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

@@ -10,6 +10,7 @@ CleanStack is a web app for cleaning tabular files and documents with an AI-revi
 - [Configuration](#configuration)
 - [Deployment](#deployment)
 - [Operations runbook](#operations-runbook)
+- [Guest access](#guest-access)
 - [Security model](#security-model)
 - [Known limitations](#known-limitations)
 - [Transform rules](#transform-rules)
@@ -129,9 +130,9 @@ PYTHON=python npm run test:e2e                   # tests/e2e (playwright.config.
 
 | Suite | Command | What it covers |
 |---|---|---|
-| Integration (TS) | `npm run test:integration` | upload presigned POST → S3 notification → profiler → suggest-transforms (fake model) → approve → executor SQS message → executor → presigned download fetch; account deletion purging every object version and delete marker; approve-rules claim under 8 concurrent requests; pg driver result shapes; guest sessions (signed cookie, `guest_sessions` row, per-IP cap) and a guest's 2 MB upload refused by the profiler |
+| Integration (TS) | `npm run test:integration` | upload presigned POST → S3 notification → profiler → suggest-transforms (fake model) → approve → executor SQS message → executor → presigned download fetch; account deletion purging every object version and delete marker; approve-rules claim under 8 concurrent requests; pg driver result shapes; guest sessions (signed cookie, `guest_sessions` row, per-IP cap) and a guest's 2 MB upload refused by the profiler; guest quotas and AI budget (`guest-limits.test.ts`); sample data on the seeded template through the real profiler and executor to a pinned clean file, then `/api/cron/purge-guests` erasing the expired guest (`guest-demo.test.ts`) |
 | Integration (Python) | `CLEANSTACK_INTEGRATION=1 pytest lambdas/tests/integration` | executor idempotency with duplicate SQS deliveries (separate and same batch), retry and last-attempt semantics, profiler on a real S3 notification |
-| E2E | `npm run test:e2e` | sign in → upload a CSV → suggested rules → approve → completion → download with no `__orig_*` columns; guest session → upload → review, a guest's 2.1 MB file refused in the form and with 413; the auth bypass is off without the flag and on Vercel, and a forged guest cookie is not a session |
+| E2E | `npm run test:e2e` | sign in → upload a CSV → suggested rules → approve → completion → download with no `__orig_*` columns; guest session → upload → review, a guest's 2.1 MB file refused in the form and with 413, blocked features and the upload cap, and the full guest flow (Try as guest → sample data → approve → completed → download → End session); the auth bypass is off without the flag and on Vercel, and a forged guest cookie is not a session |
 
 All environment for these suites lives in `tests/support/test-env.mjs`. Variables already set in your shell win. `pytest lambdas/tests` without `CLEANSTACK_INTEGRATION=1` skips the integration directory, so the unit suite never needs containers. With the variable set, missing services are an error, not a skip.
 
@@ -219,6 +220,8 @@ aws lambda update-function-code --function-name cleanstack-executor \
 - **Processed bucket CORS:** allow `GET` from the app origin. The browser fetches the presigned URL for **Export As**; the plain download is a navigation and needs no CORS.
 - **IAM for the web app role:** `s3:PutObject` (raw), `s3:GetObject` (processed), and for account erasure `s3:ListBucketVersions`, `s3:ListBucket`, `s3:DeleteObject` and `s3:DeleteObjectVersion` on both buckets, plus `sqs:SendMessage` on both queues, `rds-data:ExecuteStatement`/`BeginTransaction`/`CommitTransaction`/`RollbackTransaction` on the cluster, `secretsmanager:GetSecretValue` on the DB secret, and `bedrock:InvokeModel` for the configured model.
 - **IAM for the executor:** the same S3 version permissions on the raw bucket. Without `s3:ListBucketVersions` it falls back to deleting only the two known raw keys.
+- **Guest purge schedule:** call `GET /api/cron/purge-guests` with `Authorization: Bearer $CRON_SECRET` every hour (an EventBridge Scheduler target, like the reconciler). Each call erases up to 20 expired guests. Vercel Hobby crons run at most daily, so `vercel.json` defines none.
+- **Raw bucket lifecycle rule (backstop):** expire objects under prefix `guest_` after 1 day, including noncurrent versions, in case the purge stops running.
 - **Reconciler schedule:** something must call `GET /api/cron/reconcile-runs` with `Authorization: Bearer $CRON_SECRET` every few minutes. `vercel.json` defines no cron. The project's earlier documentation describes an EventBridge rule running every 5 minutes.
 
 ---
@@ -242,6 +245,19 @@ aws lambda update-function-code --function-name cleanstack-executor \
 
 ---
 
+## Guest access
+
+Off until `GUEST_COOKIE_SECRET` is set. When on, the landing and sign-in pages show **Try as guest**, which calls `POST /api/guest` (with a Turnstile widget when `NEXT_PUBLIC_TURNSTILE_SITE_KEY` is set) and lands on the dashboard. A guest:
+
+- has an id `guest_<22 chars>` that is their `team_id`, so all tenant isolation applies unchanged;
+- sees a banner in the nav with the time left, **Sign up to keep your work** and **End session** (`DELETE /api/guest`);
+- can upload (2 MB, 3 files) or press **Try with sample data**: `POST /api/sample-data` writes `src/lib/sample-data.ts`'s CSV to the raw bucket and attaches the demo template seeded by migration 003, so the rules come from the template and no Bedrock call is made;
+- gets the limits and blocked features listed under [Security model](#security-model).
+
+After 24 h the cookie stops working and `/api/cron/purge-guests` erases the guest's S3 objects (every version) and rows with the same helper as account deletion (`src/lib/erase-team.ts`). `bedrock_usage` rows are kept so the all-guests daily AI cap and cost reporting stay correct. Signing up does not carry guest work over to the new account.
+
+---
+
 ## Security model
 
 What the code does today. Settings that live only in AWS are listed as such.
@@ -252,7 +268,8 @@ What the code does today. Settings that live only in AWS are listed as such.
 - **File access.** Uploads go straight to S3 with a 300 s presigned POST whose policy pins the key and content type and caps the size (`content-length-range`, `src/lib/upload-limits.ts`: 100 MB or `MAX_UPLOAD_MB`, guests 2 MB). `/api/upload` refuses a larger declared size with 413 and the profiler marks a run failed, without reading the object, when the stored object is over the limit; downloads use a 120 s presigned GET for the caller's own completed run. Files never pass through the serverless function.
 - **Data lifecycle.**
   - After a successful execution, the executor deletes every object version under the run's raw prefix (`{user}/{pipeline}/{run}/`), including `extracted_text.txt` (`auto_delete_raw`, on by default).
-  - Raw files of **failed** runs are not deleted, and there are no S3 lifecycle rules in the repo.
+  - Raw files of **failed** runs are not deleted, and there are no S3 lifecycle rules in the repo (the `guest_` rule in Deployment is set by hand).
+  - Guests are erased 24 h after their session starts by `/api/cron/purge-guests` (S3 every version, then rows; `bedrock_usage` kept).
   - `DELETE /api/account?confirm=true` purges every version and delete marker under the user's raw prefix and their pipelines' processed prefixes, then deletes the DB rows. If S3 fails it aborts before touching the DB.
 - **AI.** Uploaded content is sent to Amazon Bedrock and wrapped in `<user_data>` tags with an instruction to treat it as data. This reduces prompt-injection risk but does not prevent it, which is why rules need approval (or the committee in auto mode). `checkAiBudget` (`src/lib/bedrock-meter.ts`) runs in Postgres before every Bedrock call (suggest-transforms on every pass, the auto-validate committee, chat-builder, generate-data), and every call is metered in `bedrock_usage`.
 - **Guest access** (`src/lib/guest.ts`, off unless `GUEST_COOKIE_SECRET` is set). `POST /api/guest` issues an httpOnly, `SameSite=Lax`, `Secure` cookie `cs_guest` = `guest_<22 chars>.<expiry>.<HMAC-SHA256>`, valid for 24 h; `auth()` returns that `guest_…` id as the user id (it is the `team_id`), and only when no Clerk user is signed in. Sessions are recorded in `guest_sessions` with an HMAC of the client IP (never the raw IP); at most 5 per IP and 200 overall per 24 h. Turnstile is checked when `TURNSTILE_SECRET_KEY` is set. Guest quotas and blocked features are listed in `src/lib/guest-limits.ts`.
@@ -288,6 +305,8 @@ Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 - **Excel blanks are not counted as nulls** by the profiler (cells are read as empty strings). Before/after scores are still computed the same way.
 - **AI budget is checked before a call and recorded after it.** Concurrent requests can each pass the check and overshoot a cap by the cost of the calls in flight (the committee's 3 calls are reserved together). Costs are estimates from `src/lib/ai-config.ts`, not the AWS bill.
 - **Upload size limit is per file only.** 100 MB (`MAX_UPLOAD_MB`) for users, 2 MB for guests. A file under the limit can still exhaust the executor Lambda's memory or time for expensive rules. `semantic_deduplicate` (MinHash + LSH, a few seconds for 50k short texts) is skipped with a reason instead of running past the Lambda deadline, and above `SEMANTIC_DEDUP_MAX_ROWS` rows; other rules have no such guard.
+- **Guest abuse limits are per IP hash and per cookie.** Clearing cookies starts a new guest; the 5 sessions per IP and 200 per day caps (and Turnstile, if enabled) bound that. Users behind one NAT or VPN share the per-IP caps. A guest's upload counts come from the IP at session start.
+- **Guest work is not migrated** to an account on sign-up.
 - **Schema drift alerts** store their diff inside `column_definitions`, so the next alert reports a phantom `_diff` column.
 - **Templates** copy approved rules from all recent runs of a pipeline, not only the latest run.
 - **`middleware.ts`** uses the file convention that Next.js 16 deprecated in favour of `proxy.ts`. It still works; the rename is pending a test against real Clerk keys.
@@ -334,7 +353,8 @@ Accepted uploads: CSV, TSV, TXT, JSON, JSONL, XLSX, XLS (delivered as XLSX), XML
 ```
 src/app/            pages and API routes (api/*/route.ts)
 src/components/     React components
-src/lib/            db (Data API), env, logger, secrets, ai-config, s3-erase,
+src/lib/            db (Data API), env, logger, secrets, ai-config, s3-erase, erase-team,
+                    guest (cookie), guest-limits/-quota/-guard, upload-limits, sample-data,
                     download/training-export helpers, schema.sql, migrations/
 lambdas/            profiler, executor, ai-trigger, drift handlers + tests/
 ci/                 verify.sh (the workflow is .github/workflows/ci.yml)

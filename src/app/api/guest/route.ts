@@ -30,6 +30,9 @@ const iso = (unixSeconds: number) => new Date(unixSeconds * 1000).toISOString();
 
 export async function GET(req: NextRequest) {
   if (!guestAccessEnabled()) return NextResponse.json({ enabled: false, guest: null });
+  // A signed-in user with a stale guest cookie is not a guest (auth() prefers Clerk).
+  const { userId } = await auth().catch(() => ({ userId: null }));
+  if (userId && !isGuestId(userId)) return NextResponse.json({ enabled: true, guest: null });
   const session = await guestFromCookie(req.cookies.get(GUEST_COOKIE)?.value);
   return NextResponse.json({ enabled: true, guest: session ? { expires_at: iso(session.expiresAt) } : null });
 }

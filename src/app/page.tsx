@@ -15,12 +15,13 @@ import {
   DollarSign,
 } from "lucide-react";
 import { CleanStackLogo } from "@/components/Logo";
+import { GuestStartButton } from "@/components/Guest";
 
 const features = [
   {
     icon: FileStack,
     title: "Multi-format Ingestion",
-    description: "CSV, Excel, PDF, scanned invoices, JSON, XML, Parquet — upload anything, 50 MB limit.",
+    description: "CSV, Excel, PDF, scanned invoices, JSON, XML, Parquet — upload anything, up to 100 MB per file.",
   },
   {
     icon: ScanSearch,
@@ -138,6 +139,9 @@ export default function LandingPage() {
             >
               See pricing
             </Link>
+          </div>
+          <div className="mt-4 flex justify-center">
+            <GuestStartButton className="inline-flex items-center gap-2 border border-gray-700 hover:border-gray-500 hover:bg-gray-900 text-gray-300 hover:text-white px-6 py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50" />
           </div>
           <p className="mt-6 flex items-center justify-center gap-2 text-xs text-gray-500">
             <Check className="h-3.5 w-3.5 text-emerald-400" />

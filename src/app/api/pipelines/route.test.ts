@@ -24,7 +24,7 @@ describe("POST /api/pipelines", () => {
     expect((await create()).status).toBe(201);
     const [sql, params] = h.queryOne.mock.calls[0];
     expect(sql).toContain("(SELECT count(*) FROM pipelines WHERE team_id = $3) < $4");
-    expect(params).toEqual(["p", null, GUEST, 5]);
+    expect(params).toEqual(["p", null, GUEST, 5, null]);
     h.queryOne.mockResolvedValue(null);
     const res = await create();
     expect(res.status).toBe(429);

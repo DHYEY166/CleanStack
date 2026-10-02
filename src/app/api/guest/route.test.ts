@@ -105,6 +105,9 @@ describe("GET/DELETE /api/guest", () => {
       enabled: true, guest: { expires_at: new Date(expiresAt * 1000).toISOString() },
     });
     expect(await (await GET(req("GET", { cookie: "forged" }))).json()).toEqual({ enabled: true, guest: null });
+    // A signed-in user with a leftover guest cookie is not shown as a guest.
+    h.auth.mockResolvedValue({ userId: "user_1" });
+    expect(await (await GET(req("GET", { cookie: token }))).json()).toEqual({ enabled: true, guest: null });
     const del = await DELETE();
     expect(del.headers.get("set-cookie")).toMatch(new RegExp(`${GUEST_COOKIE}=;`));
   });

@@ -3,10 +3,13 @@
  * sets the signed cs_guest cookie, the guest can open protected pages, sees a
  * 2 MB per-file limit, uploads through the presigned POST and reaches review.
  * Guests are kept out of blocked features and capped at 3 uploads. Each test
- * uses its own X-Forwarded-For so the per-IP caps never interfere.
+ * uses its own X-Forwarded-For so the per-IP caps never interfere. The full
+ * flow starts from the sign-in page button and runs the sample data to a download.
  */
 import { expect, test, type Page } from "@playwright/test";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { SAMPLE_CLEAN_LINES } from "../support/sample-expected";
 import { randomUUID } from "node:crypto";
 
 const FIXTURE = join(__dirname, "fixtures", "orders.csv");
@@ -74,4 +77,43 @@ test("guests are kept out of blocked features and capped at 3 uploads", async ({
   const fourth = await start();
   expect(fourth.status()).toBe(429);
   expect((await fourth.json()).error).toBe("Guests can upload 3 files. Sign up to keep going.");
+});
+
+test("full guest flow: try as guest -> sample data -> approve -> completed -> download -> end session", async ({ page }) => {
+  // Give this browser its own client IP for the per-IP guest caps.
+  const ip = `e2e-${randomUUID()}`;
+  await page.route("**/api/guest", (route) => route.continue({ headers: { ...route.request().headers(), "x-forwarded-for": ip } }));
+
+  await page.goto("/sign-in");
+  await page.getByRole("button", { name: "Try as guest, no sign-up" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByTestId("guest-banner")).toContainText("Guest session: everything is deleted in 23 h");
+  await expect(page.getByRole("link", { name: "Sign up to keep your work" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Templates" })).toHaveCount(0);
+
+  // Sample data: template rules, no AI
+  await page.getByRole("button", { name: "Try with sample data" }).click();
+  await expect(page).toHaveURL(/\/pipelines\/[0-9a-f-]+\/runs\/[0-9a-f-]+$/, { timeout: 30_000 });
+  await expect(page.getByText("awaiting approval", { exact: false }).first()).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("link", { name: /Open Data PR/ }).click();
+  await expect(page.getByText("6 rules to review")).toBeVisible();
+  await expect(page.getByText("Orders 1004 and 1011 appear twice with identical values.")).toBeVisible();
+  await page.getByRole("button", { name: "Approve all" }).click();
+  await page.getByRole("button", { name: /Submit Review/ }).click();
+
+  const download = page.getByRole("button", { name: /Download CSV/ });
+  await expect(download).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText("completed", { exact: true }).first()).toBeVisible();
+  // Guests get no auto-clean or training export
+  await expect(page.getByRole("button", { name: /auto-clean|Run remaining passes/i })).toHaveCount(0);
+  const [file] = await Promise.all([page.waitForEvent("download"), download.click()]);
+  const csv = readFileSync(await file.path(), "utf8").trim().split(/\r?\n/);
+  expect(csv).toEqual(SAMPLE_CLEAN_LINES);
+
+  // End the session: cookie cleared, protected pages need sign-in again
+  await page.getByRole("button", { name: "End session" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect((await page.context().cookies()).find((c) => c.name === "cs_guest")).toBeUndefined();
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/sign-in/);
 });

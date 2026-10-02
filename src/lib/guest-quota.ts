@@ -60,7 +60,7 @@ export async function guestUploadRefusal(guestId: string): Promise<string> {
 
 /** Inserts a guest pipeline only while the guest has fewer than pipelinesPerGuest. */
 export const GUEST_PIPELINE_INSERT_SQL = `
-INSERT INTO pipelines (name, description, owner_id, team_id)
-SELECT $1, $2, $3, $3
+INSERT INTO pipelines (name, description, owner_id, team_id, template_id)
+SELECT $1, $2, $3, $3, $5::uuid
 WHERE (SELECT count(*) FROM pipelines WHERE team_id = $3) < $4
 RETURNING *`;
