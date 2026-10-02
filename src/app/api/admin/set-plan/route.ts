@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { queryOne } from "@/lib/db";
 import { PLANS, type PlanId } from "@/lib/billing";
+import { optionalEnv } from "@/lib/env";
 
 export async function POST(req: Request) {
-  const expectedSecret = process.env.ADMIN_SECRET ?? "";
+  const expectedSecret = optionalEnv("ADMIN_SECRET") ?? "";
   if (!expectedSecret || !safeCompare((req.headers as Headers).get("x-admin-secret") ?? "", expectedSecret)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }

@@ -2,19 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { queryOne } from "@/lib/db";
+import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 
 // When AI_QUEUE_ENABLED=true: enqueue to SQS → return 200 immediately (profiler doesn't wait)
 // When AI_QUEUE_ENABLED=false: direct HTTP call to suggest-transforms (original behavior)
-const AI_QUEUE_ENABLED = process.env.AI_QUEUE_ENABLED === "true";
+const AI_QUEUE_ENABLED = optionalEnv("AI_QUEUE_ENABLED") === "true";
 
-const sqs = new SQSClient({ region: process.env.AWS_REGION || "us-east-1" });
+const sqs = new SQSClient({ region: awsRegion() });
 
 export const maxDuration = 300;
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "awaiting_approval", "queued", "running"]);
 
 export async function POST(req: NextRequest) {
-  const expectedSecret = process.env.WEBHOOK_SECRET ?? "";
+  const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
     console.error("[profile-complete] WEBHOOK_SECRET not set — rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
   if (AI_QUEUE_ENABLED) {
     // Async path: enqueue and return immediately — profiler no longer blocks
     await sqs.send(new SendMessageCommand({
-      QueueUrl: process.env.AI_JOBS_QUEUE_URL,
+      QueueUrl: requireEnv("AI_JOBS_QUEUE_URL"),
       MessageBody: JSON.stringify({ run_id }),
       MessageGroupId: undefined,
     }));
@@ -66,12 +67,12 @@ export async function POST(req: NextRequest) {
   }
 
   // Sync fallback (original behavior)
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://clean-stack-eta.vercel.app";
+  const baseUrl = optionalEnv("NEXT_PUBLIC_APP_URL") ?? "https://clean-stack-eta.vercel.app";
   const res = await fetch(`${baseUrl}/api/suggest-transforms`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "",
+      "x-webhook-secret": optionalEnv("WEBHOOK_SECRET") ?? "",
     },
     body: JSON.stringify({ run_id }),
   });

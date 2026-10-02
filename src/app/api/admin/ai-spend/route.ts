@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { query } from "@/lib/db";
+import { optionalEnv } from "@/lib/env";
 
 export async function GET(req: NextRequest) {
-  const expectedSecret = process.env.ADMIN_SECRET ?? "";
+  const expectedSecret = optionalEnv("ADMIN_SECRET") ?? "";
   if (!expectedSecret || !safeCompare(req.headers.get("x-admin-secret") ?? "", expectedSecret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

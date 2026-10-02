@@ -7,8 +7,9 @@ import { queryOne, queryOneWithTeam } from "@/lib/db";
 import { getCachedQuota } from "@/lib/quota-cache";
 import { uploadLimiter, checkRateLimit } from "@/lib/rate-limit";
 import type { PipelineRun } from "@/lib/types";
+import { requireEnv, awsRegion } from "@/lib/env";
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+const s3 = new S3Client({ region: awsRegion() });
 
 const ALLOWED_EXTENSIONS = new Set([
   "csv", "tsv", "txt", "json", "jsonl",
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
     if (!run) return NextResponse.json({ error: "Failed to create run" }, { status: 500 });
 
     const command = new PutObjectCommand({
-      Bucket: process.env.S3_RAW_BUCKET,
+      Bucket: requireEnv("S3_RAW_BUCKET"),
       Key: s3Key,
       ContentType: content_type,
     });

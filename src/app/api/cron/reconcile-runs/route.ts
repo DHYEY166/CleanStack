@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { query } from "@/lib/db";
+import { optionalEnv } from "@/lib/env";
 
 export const maxDuration = 30;
 
@@ -8,7 +9,7 @@ const STUCK_AFTER_MINUTES = 20;
 const PENDING_ORPHAN_AFTER_MINUTES = 60;
 
 export async function GET(req: Request) {
-  const expectedCronSecret = process.env.CRON_SECRET ?? "";
+  const expectedCronSecret = optionalEnv("CRON_SECRET") ?? "";
   if (!expectedCronSecret || !safeCompare(req.headers.get("Authorization") ?? "", `Bearer ${expectedCronSecret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

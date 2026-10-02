@@ -12,6 +12,7 @@ export const maxDuration = 300;
 import { z } from "zod";
 import { queryOne, query } from "@/lib/db";
 import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@/lib/types";
+import { requireEnv, optionalEnv } from "@/lib/env";
 
 const ruleSchema = z.object({
   rule_type: z.enum([
@@ -66,7 +67,7 @@ const documentOutputSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const expectedSecret = process.env.WEBHOOK_SECRET ?? "";
+  const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
     console.error("[suggest-transforms] WEBHOOK_SECRET not set — rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -342,10 +343,10 @@ IMPORTANT RULES:
       )
     );
     if (run.auto_mode) {
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+      const baseUrl = requireEnv("NEXT_PUBLIC_APP_URL");
       const avRes = await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
         method: "POST",
-        headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
+        headers: { "x-webhook-secret": optionalEnv("WEBHOOK_SECRET") ?? "" },
       });
       if (!avRes.ok) {
         const body = await avRes.text().catch(() => "");
@@ -689,10 +690,10 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
   );
 
   if (run.auto_mode) {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const baseUrl = requireEnv("NEXT_PUBLIC_APP_URL");
     const avRes = await fetch(`${baseUrl}/api/auto-validate/${run_id}`, {
       method: "POST",
-      headers: { "x-webhook-secret": process.env.WEBHOOK_SECRET ?? "" },
+      headers: { "x-webhook-secret": optionalEnv("WEBHOOK_SECRET") ?? "" },
     });
     if (!avRes.ok) {
       const body = await avRes.text().catch(() => "");

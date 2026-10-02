@@ -5,8 +5,9 @@ import { queryOneWithTeam } from "@/lib/db";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 import { deliverableFormat } from "@/lib/download";
 import { parseDeliverableRows, toTrainingFormat, type TrainingFormat } from "@/lib/training-export";
+import { requireEnv, awsRegion } from "@/lib/env";
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+const s3 = new S3Client({ region: awsRegion() });
 
 type SplitRatio = "none" | "80-10-10" | "70-15-15" | "60-20-20";
 type SplitTarget = "all" | "train" | "val" | "test";
@@ -73,7 +74,7 @@ export async function GET(
     }
 
     const obj = await s3.send(new GetObjectCommand({
-      Bucket: process.env.S3_PROCESSED_BUCKET!,
+      Bucket: requireEnv("S3_PROCESSED_BUCKET"),
       Key: run.processed_s3_key,
     }));
 

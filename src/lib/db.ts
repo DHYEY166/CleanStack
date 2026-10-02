@@ -7,18 +7,17 @@ import {
   type SqlParameter,
   type Field,
 } from "@aws-sdk/client-rds-data";
+import { requireEnv, awsRegion } from "@/lib/env";
 
 const client = new RDSDataClient({
-  region: process.env.AWS_REGION || "us-east-1",
+  region: awsRegion(),
 });
 
 function getArns() {
-  const clusterArn = process.env.AURORA_CLUSTER_ARN;
-  const secretArn = process.env.AURORA_SECRET_ARN;
-  if (!clusterArn || !secretArn) {
-    throw new Error("AURORA_CLUSTER_ARN and AURORA_SECRET_ARN env vars are required");
-  }
-  return { clusterArn, secretArn };
+  return {
+    clusterArn: requireEnv("AURORA_CLUSTER_ARN"),
+    secretArn: requireEnv("AURORA_SECRET_ARN"),
+  };
 }
 
 

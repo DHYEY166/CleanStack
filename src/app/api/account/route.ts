@@ -3,8 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { S3Client } from "@aws-sdk/client-s3";
 import { query, queryOne, withTransaction } from "@/lib/db";
 import { keyDirectory, purgePrefix, type PurgeResult } from "@/lib/s3-erase";
+import { requireEnv, awsRegion } from "@/lib/env";
 
-const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
+const s3 = new S3Client({ region: awsRegion() });
 
 export const maxDuration = 60;
 
@@ -41,10 +42,13 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 
-  const rawBucket = process.env.S3_RAW_BUCKET;
-  const procBucket = process.env.S3_PROCESSED_BUCKET;
-  if (!rawBucket || !procBucket) {
-    console.error("[DELETE /api/account] S3_RAW_BUCKET / S3_PROCESSED_BUCKET not set; refusing partial erasure");
+  let rawBucket: string;
+  let procBucket: string;
+  try {
+    rawBucket = requireEnv("S3_RAW_BUCKET");
+    procBucket = requireEnv("S3_PROCESSED_BUCKET");
+  } catch (err) {
+    console.error("[DELETE /api/account] refusing partial erasure:", (err as Error).message);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 

@@ -7,10 +7,11 @@ import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne } from "@/lib/db";
 import { meterBedrockCall } from "@/lib/bedrock-meter";
 import type { TransformRule, DataProfile } from "@/lib/types";
+import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 
 export const maxDuration = 120;
 
-const sqs = new SQSClient({ region: process.env.AWS_REGION ?? "us-east-1" });
+const sqs = new SQSClient({ region: awsRegion() });
 
 // Risk tiers — votes needed to approve
 const RISK_THRESHOLDS: Record<string, number> = {
@@ -95,7 +96,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ runId: string }> }
 ) {
-  const expectedSecret = process.env.WEBHOOK_SECRET ?? "";
+  const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
     console.error("[auto-validate] WEBHOOK_SECRET not set — rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -245,13 +246,13 @@ ${responseFormat}`,
     ),
   ]);
 
-  if (approved.length > 0 && process.env.SQS_QUEUE_URL) {
+  if (approved.length > 0 && optionalEnv("SQS_QUEUE_URL")) {
     // Set status before SQS so reconciler can pick up the run if SQS fails
     await queryOne("UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1", [runId]);
     try {
       await sqs.send(
         new SendMessageCommand({
-          QueueUrl: process.env.SQS_QUEUE_URL,
+          QueueUrl: requireEnv("SQS_QUEUE_URL"),
           MessageBody: JSON.stringify({ run_id: runId }),
         })
       );
