@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import * as XLSX from "@e965/xlsx";
+import { stripSidecarKeys } from "@/lib/sidecar";
 
 type Format = "csv" | "tsv" | "txt" | "json" | "jsonl" | "xlsx" | "xml";
 
@@ -29,6 +30,34 @@ const EXPORT_OPTIONS: { value: Format; label: string }[] = [
 function nativeExt(fmt: string): string {
   if (fmt === "xls") return "xlsx";
   return fmt || "csv";
+}
+
+interface PresignedDownload {
+  url: string;
+  filename: string;
+  format: string;
+  expiresIn: number;
+}
+
+/** Ask the API for a short-lived presigned S3 URL for this run's deliverable. */
+async function getDownloadLink(runId: string): Promise<PresignedDownload> {
+  const res = await fetch(`/api/download/${runId}`, { cache: "no-store" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  return body as PresignedDownload;
+}
+
+function navigateToDownload(url: string) {
+  // S3 serves the object with Content-Disposition: attachment, so navigating
+  // downloads the exact stored bytes without buffering them in the page.
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function triggerDownload(blob: Blob, name: string) {
@@ -165,24 +194,8 @@ export default function DownloadButton({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/download/${runId}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-      }
-      const buf = await res.arrayBuffer();
-      const mimes: Record<string, string> = {
-        csv:   "text/csv",
-        txt:   "text/plain",
-        tsv:   "text/tab-separated-values",
-        json:  "application/json",
-        jsonl: "application/x-ndjson",
-        xlsx:  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        xml:   "application/xml",
-        pdf:   "application/pdf",
-        docx:  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      };
-      triggerDownload(new Blob([buf], { type: mimes[native] ?? "application/octet-stream" }), `${filename}.${native}`);
+      const link = await getDownloadLink(runId);
+      navigateToDownload(link.url);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     } finally {
@@ -194,13 +207,15 @@ export default function DownloadButton({
     setExporting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/download/${runId}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
-      }
+      const link = await getDownloadLink(runId);
+      // Cross-origin fetch of the presigned URL: requires a CORS GET rule on
+      // the processed bucket for the app origin (see README, ops runbook).
+      const res = await fetch(link.url);
+      if (!res.ok) throw new Error(`Download failed (HTTP ${res.status})`);
       const buf = await res.arrayBuffer();
-      const rows = await bufferToRecords(buf, inputFormat);
+      // Deliverables are sidecar-free; stripping keeps files produced by
+      // older executor versions from leaking pre-transform values.
+      const rows = (await bufferToRecords(buf, link.format)).map(stripSidecarKeys);
       const { blob, ext } = recordsToBlob(rows, exportFmt);
       triggerDownload(blob, `${filename}.${ext}`);
     } catch (err) {

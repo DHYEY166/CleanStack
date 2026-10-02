@@ -3,10 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { queryOneWithTeam } from "@/lib/db";
 import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
+import { deliverableFormat } from "@/lib/download";
+import { parseDeliverableRows, toTrainingFormat, type TrainingFormat } from "@/lib/training-export";
 
 const s3 = new S3Client({ region: process.env.AWS_REGION ?? "us-east-1" });
 
-type TrainingFormat = "raw_jsonl" | "alpaca" | "chat";
 type SplitRatio = "none" | "80-10-10" | "70-15-15" | "60-20-20";
 type SplitTarget = "all" | "train" | "val" | "test";
 
@@ -19,53 +20,6 @@ function seededShuffle<T>(arr: T[], seed: string): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
-}
-
-function parseToRows(bytes: Buffer, fmt: string): Record<string, unknown>[] {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const XLSX = require("@e965/xlsx");
-
-  if (fmt === "json") {
-    const parsed = JSON.parse(bytes.toString("utf-8"));
-    return Array.isArray(parsed) ? parsed : [parsed];
-  }
-  if (fmt === "jsonl") {
-    return bytes.toString("utf-8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  }
-  if (fmt === "tsv") {
-    const lines = bytes.toString("utf-8").trim().split("\n").filter(Boolean);
-    const headers = lines[0].split("\t");
-    return lines.slice(1).map((l) => {
-      const vals = l.split("\t");
-      return Object.fromEntries(headers.map((h, i) => [h, vals[i] ?? ""]));
-    });
-  }
-  if (fmt === "xlsx" || fmt === "xls") {
-    const wb = XLSX.read(bytes, { type: "buffer" });
-    return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]) as Record<string, unknown>[];
-  }
-  // csv / txt — use xlsx CSV parser
-  const wb = XLSX.read(bytes, { type: "buffer", raw: false });
-  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]) as Record<string, unknown>[];
-}
-
-function toTrainingFormat(rows: Record<string, unknown>[], fmt: TrainingFormat): string {
-  if (fmt === "alpaca") {
-    return rows.map((row) => JSON.stringify({
-      instruction: "Process and analyze this data record.",
-      input: JSON.stringify(row),
-      output: "",
-    })).join("\n");
-  }
-  if (fmt === "chat") {
-    return rows.map((row) => JSON.stringify({
-      messages: [
-        { role: "user", content: JSON.stringify(row) },
-        { role: "assistant", content: "" },
-      ],
-    })).join("\n");
-  }
-  return rows.map((row) => JSON.stringify(row)).join("\n");
 }
 
 function getSplitRatios(split: SplitRatio): [number, number] {
@@ -127,8 +81,8 @@ export async function GET(
     for await (const chunk of obj.Body as AsyncIterable<Uint8Array>) chunks.push(chunk);
     const fileBytes = Buffer.concat(chunks);
 
-    const fmt = run.file_format ?? "csv";
-    const rows = parseToRows(fileBytes, fmt);
+    const fmt = deliverableFormat(run.processed_s3_key, run.file_format);
+    const rows = parseDeliverableRows(fileBytes, fmt);
     if (!rows.length) return NextResponse.json({ error: "No rows found" }, { status: 400 });
 
     const shuffled = seededShuffle(rows, runId);
