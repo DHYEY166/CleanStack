@@ -76,8 +76,9 @@ function getPool(): pg.Pool {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) throw new Error("Configuration error: DATABASE_URL is not set (DB_DRIVER=pg)");
-    pool = new pg.Pool({ connectionString, max: 10, types: dataApiTypes });
-    pool.on("connect", (c) => { void c.query("SET TIME ZONE 'UTC'"); });
+    // Session TimeZone=UTC as a startup parameter (not a post-connect query, which
+    // would race the first statement on the connection).
+    pool = new pg.Pool({ connectionString, max: 10, types: dataApiTypes, options: "-c TimeZone=UTC" });
   }
   return pool;
 }
