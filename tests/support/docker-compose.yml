@@ -1,0 +1,26 @@
+# Local services for the integration and e2e suites (CI uses the same images
+# as GitHub Actions service containers, see .github/workflows/ci.yml).
+#
+#   docker compose -f tests/support/docker-compose.yml up -d --wait
+#   node tests/support/setup-services.mjs
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cleanstack
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 30
+  localstack:
+    # Pinned: newer LocalStack images require an auth token.
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: s3,sqs
+    ports: ["4566:4566"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -q '\"s3\": \"running\"'"]
+      interval: 2s
+      retries: 60
