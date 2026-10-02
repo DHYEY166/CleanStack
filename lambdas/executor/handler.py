@@ -1152,20 +1152,111 @@ def _record_rule_results(cur, results: list) -> None:
         )
 
 
-def handler(event, context):
-    record = event["Records"][0]
-    body = json.loads(record["body"])
-    run_id = body["run_id"]
 
+def _run_prefix(raw_s3_key: str) -> str | None:
+    """'{user}/{pipeline}/{run}/raw.csv' -> '{user}/{pipeline}/{run}/'. None if the key is not run-scoped."""
+    parts = raw_s3_key.split("/")
+    if len(parts) < 4 or not all(parts[:3]):
+        return None
+    return "/".join(parts[:3]) + "/"
+
+
+def delete_raw_run_objects(s3_client, bucket: str, raw_s3_key: str) -> dict:
+    """Delete everything under the run's raw prefix: the upload AND extracted_text.txt (review H5).
+
+    Lists and deletes every object version and delete marker, so nothing stays recoverable on a
+    versioned bucket. Falls back to deleting the current version of the two known keys when the
+    role may not list/delete versions. Never raises: cleanup must not fail a completed run.
+    """
+    prefix = _run_prefix(raw_s3_key)
+    known_keys = [raw_s3_key] + ([prefix + "extracted_text.txt"] if prefix else [])
+    try:
+        if not prefix:
+            raise ValueError(f"refusing to purge non run-scoped key {raw_s3_key!r}")
+        objects = []
+        paginator = s3_client.get_paginator("list_object_versions")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for item in page.get("Versions", []) + page.get("DeleteMarkers", []):
+                objects.append({"Key": item["Key"], "VersionId": item["VersionId"]})
+        for i in range(0, len(objects), 1000):
+            s3_client.delete_objects(Bucket=bucket, Delete={"Objects": objects[i:i + 1000], "Quiet": True})
+        print(f"[executor] purged {len(objects)} object versions under s3://{bucket}/{prefix}")
+        return {"mode": "all_versions", "deleted": len(objects)}
+    except Exception as e:
+        print(f"[executor] version purge failed ({e}); deleting current versions of known keys")
+        deleted = 0
+        for key in known_keys:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=key)
+                deleted += 1
+            except Exception as del_err:
+                print(f"[executor] delete of s3://{bucket}/{key} failed (non-fatal): {del_err}")
+        return {"mode": "current_only", "deleted": deleted}
+
+
+# A 'running' run whose last update is older than this is an abandoned lease (Lambda's hard
+# limit is 15 minutes, so the invocation that claimed it is gone) and may be re-claimed.
+STALE_RUNNING_MINUTES = 15
+
+# Conditional transition: of N deliveries of the same message only one gets a row back (review H4).
+CLAIM_SQL = f"""UPDATE pipeline_runs SET status = 'running', updated_at = now()
+               WHERE id = %s
+                 AND (status = 'queued'
+                      OR (status = 'running' AND updated_at < now() - interval '{STALE_RUNNING_MINUTES} minutes'))
+               RETURNING id"""
+
+
+def _publish_drift(cur, conn, pipeline_id: str, run_id: str, df: pd.DataFrame) -> None:
+    """Snapshot the deliverable's schema and publish to SNS when it changed since the last run."""
+    new_hash, col_defs = schema_hash(df)
+    cur.execute(
+        """SELECT schema_hash FROM schema_snapshots
+           WHERE pipeline_id = %s
+           ORDER BY created_at DESC LIMIT 1""",
+        (pipeline_id,)
+    )
+    last = cur.fetchone()
+    cur.execute(
+        """INSERT INTO schema_snapshots (pipeline_id, run_id, schema_hash, column_definitions)
+           VALUES (%s, %s, %s, %s)""",
+        (pipeline_id, run_id, new_hash, json.dumps(col_defs))
+    )
+    conn.commit()
+    if last and last[0] != new_hash:
+        sns_topic = os.environ.get("SNS_DRIFT_TOPIC_ARN")
+        if sns_topic:
+            sns.publish(
+                TopicArn=sns_topic,
+                Subject=f"Schema drift detected — pipeline {pipeline_id}",
+                Message=json.dumps({
+                    "pipeline_id": pipeline_id,
+                    "run_id": run_id,
+                    "previous_hash": last[0],
+                    "new_hash": new_hash,
+                    "new_schema": col_defs,
+                }),
+            )
+
+
+def process_run(run_id: str, receive_count: int = 1) -> dict:
+    """Execute one run.
+
+    Idempotent: a duplicate or late message for a run that is not 'queued' (or an abandoned
+    'running' lease) is a no-op, so SQS at-least-once delivery can no longer flip a completed run
+    to 'failed'. A failure before completion releases the claim and raises so SQS retries, up to
+    EXECUTOR_MAX_ATTEMPTS deliveries; the last attempt marks the run failed and returns.
+    """
+    max_attempts = int(os.environ.get("EXECUTOR_MAX_ATTEMPTS", "3"))
     conn = get_db_conn()
     cur = conn.cursor()
-
+    completed = False
     try:
-        cur.execute(
-            "UPDATE pipeline_runs SET status = 'running', updated_at = now() WHERE id = %s",
-            (run_id,)
-        )
+        cur.execute(CLAIM_SQL, (run_id,))
+        claimed = cur.fetchone()
         conn.commit()
+        if not claimed:
+            print(f"[executor] run {run_id} is not queued (already processed or in progress) — skipping duplicate message")
+            return {"statusCode": 200, "run_id": run_id, "skipped": True}
 
         # Fetch run metadata + pipeline settings
         cur.execute(
@@ -1312,90 +1403,76 @@ def handler(event, context):
                SET status = 'completed',
                    processed_s3_key = %s,
                    row_count_processed = %s,
+                   error_message = NULL,
                    completed_at = now(),
                    updated_at = now()
                WHERE id = %s""",
             (processed_key, profile["total_rows"], run_id),
         )
         conn.commit()
+        completed = True
 
-        # Schema drift detection — tabular only
-        if run_mode == "document":
-            # Auto-iterate for document mode — copy raw file BEFORE deleting it
-            if auto_mode and iteration < 3:
-                _maybe_auto_iterate(
-                    cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
-                    processed_key, iteration, profile["quality_score"]
-                )
-            # Delete raw file AFTER auto-iterate has copied it (if applicable)
-            if auto_delete_raw:
-                try:
-                    raw_bucket = os.environ["S3_RAW_BUCKET"]
-                    s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
-                    print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
-                except Exception as del_err:
-                    print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
-            return {"statusCode": 200, "run_id": run_id}
+        # ---- Post-completion steps: each is best effort and must never flip a completed run ----
+        if run_mode != "document":
+            try:
+                _publish_drift(cur, conn, pipeline_id, run_id, df)
+            except Exception as drift_err:
+                conn.rollback()
+                print(f"[executor] drift snapshot failed for run {run_id} (run stays completed): {drift_err}")
 
-        # Strip __orig_* sidecar columns before schema hash — sidecars must not trigger drift alerts
-        new_hash, col_defs = schema_hash(df)  # df is the sidecar-free deliverable
-
-        cur.execute(
-            """SELECT schema_hash FROM schema_snapshots
-               WHERE pipeline_id = %s
-               ORDER BY created_at DESC LIMIT 1""",
-            (pipeline_id,)
-        )
-        last = cur.fetchone()
-
-        cur.execute(
-            """INSERT INTO schema_snapshots (pipeline_id, run_id, schema_hash, column_definitions)
-               VALUES (%s, %s, %s, %s)""",
-            (pipeline_id, run_id, new_hash, json.dumps(col_defs))
-        )
-        conn.commit()
-
-        if last and last[0] != new_hash:
-            sns_topic = os.environ.get("SNS_DRIFT_TOPIC_ARN")
-            if sns_topic:
-                sns.publish(
-                    TopicArn=sns_topic,
-                    Subject=f"Schema drift detected — pipeline {pipeline_id}",
-                    Message=json.dumps({
-                        "pipeline_id": pipeline_id,
-                        "run_id": run_id,
-                        "previous_hash": last[0],
-                        "new_hash": new_hash,
-                        "new_schema": col_defs,
-                    }),
-                )
-
-        # Auto-iterate for tabular mode — copy raw file BEFORE deleting it
+        # Auto-iterate copies the processed output into a new run prefix, so it is independent
+        # of the raw cleanup below. _maybe_auto_iterate already swallows its own errors.
         if auto_mode and iteration < 3:
             _maybe_auto_iterate(
                 cur, conn, s3, run_id, pipeline_id, raw_s3_key, fmt,
                 processed_key, iteration, profile["quality_score"]
             )
 
-        # Delete raw file AFTER auto-iterate has copied it (if applicable)
+        # Privacy: remove the raw upload AND the extracted document text (all versions).
         if auto_delete_raw:
-            try:
-                raw_bucket = os.environ["S3_RAW_BUCKET"]
-                s3.delete_object(Bucket=raw_bucket, Key=raw_s3_key)
-                print(f"[executor] deleted raw file s3://{raw_bucket}/{raw_s3_key}")
-            except Exception as del_err:
-                print(f"[executor] raw file deletion failed (non-fatal): {del_err}")
+            delete_raw_run_objects(s3, raw_bucket, raw_s3_key)
+
+        return {"statusCode": 200, "run_id": run_id}
 
     except Exception as e:
         conn.rollback()
+        if completed:
+            print(f"[executor] post-completion step failed for run {run_id} (run stays completed): {e}")
+            return {"statusCode": 200, "run_id": run_id, "post_completion_error": str(e)[:500]}
+        if receive_count < max_attempts:
+            # Release the claim so the SQS redelivery can retry this run.
+            cur.execute(
+                "UPDATE pipeline_runs SET status = 'queued', error_message = %s, updated_at = now() WHERE id = %s",
+                (f"Attempt {receive_count}/{max_attempts} failed, retrying: {e}"[:1000], run_id),
+            )
+            conn.commit()
+            raise
         cur.execute(
             "UPDATE pipeline_runs SET status = 'failed', error_message = %s, updated_at = now() WHERE id = %s",
-            (str(e), run_id),
+            (str(e)[:1000], run_id),
         )
         conn.commit()
-        raise
+        return {"statusCode": 200, "run_id": run_id, "failed": True}
     finally:
         cur.close()
         conn.close()
 
-    return {"statusCode": 200, "run_id": run_id}
+
+def handler(event, context):
+    """SQS entrypoint. Processes every record in the batch (review M5: only Records[0] was read).
+
+    If any record needs a retry the invocation raises, so SQS redelivers the batch; records that
+    already finished are skipped on redelivery by the conditional claim.
+    """
+    retry_errors = []
+    results = []
+    for record in event.get("Records", []):
+        run_id = json.loads(record["body"])["run_id"]
+        receive_count = int((record.get("attributes") or {}).get("ApproximateReceiveCount", "1"))
+        try:
+            results.append(process_run(run_id, receive_count))
+        except Exception as e:
+            retry_errors.append(f"{run_id}: {e}")
+    if retry_errors:
+        raise RuntimeError("executor will retry: " + "; ".join(retry_errors))
+    return results[0] if len(results) == 1 else {"statusCode": 200, "results": results}
