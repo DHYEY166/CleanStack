@@ -55,6 +55,7 @@ export const ENV_SPEC = {
   UPSTASH_REDIS_REST_TOKEN: { validate: nonEmpty, required: false, description: "Upstash Redis token" },
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: { validate: nonEmpty, required: true, description: "Clerk publishable key (read by @clerk/nextjs)" },
   CLERK_SECRET_KEY: { validate: nonEmpty, required: true, description: "Clerk secret key (read by @clerk/nextjs)" },
+  LOG_LEVEL: { validate: (v) => (["debug", "info", "warn", "error"].includes(v) ? null : "must be debug|info|warn|error"), required: false, description: "Structured logger threshold (default info)" },
   SENTRY_DSN: { validate: httpsUrl, required: false, description: "Server/edge Sentry DSN" },
   NEXT_PUBLIC_SENTRY_DSN: { validate: httpsUrl, required: false, description: "Browser Sentry DSN" },
 } satisfies Record<string, EnvSpec>;

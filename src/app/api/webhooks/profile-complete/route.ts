@@ -3,6 +3,9 @@ import { safeCompare } from "@/lib/secrets";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { queryOne } from "@/lib/db";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/webhooks/profile-complete" });
 
 // When AI_QUEUE_ENABLED=true: enqueue to SQS → return 200 immediately (profiler doesn't wait)
 // When AI_QUEUE_ENABLED=false: direct HTTP call to suggest-transforms (original behavior)
@@ -17,7 +20,7 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "awaiting_approval", "
 export async function POST(req: NextRequest) {
   const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
-    console.error("[profile-complete] WEBHOOK_SECRET not set — rejecting request");
+    log.error("WEBHOOK_SECRET not set; rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const secret = req.headers.get("x-webhook-secret");
@@ -39,14 +42,14 @@ export async function POST(req: NextRequest) {
 
   // Prevent resetting terminal-state runs — blocks attacker resetting completed/approved runs
   if (TERMINAL_STATUSES.has(run.status)) {
-    console.log(`[profile-complete] run ${run_id} already in terminal state ${run.status}, skipping`);
+    log.info("run already past profiling; skipping", { run_id, status: run.status });
     return NextResponse.json({ ok: true, skipped: true });
   }
 
   // Validate S3 key has expected structure (4 path segments)
   const keyParts = (run.raw_s3_key ?? "").split("/");
   if (keyParts.length < 4) {
-    console.error(`[profile-complete] invalid S3 key structure for run ${run_id}`);
+    log.error("invalid S3 key structure", { run_id });
     return NextResponse.json({ error: "Invalid run state" }, { status: 400 });
   }
 
@@ -62,7 +65,7 @@ export async function POST(req: NextRequest) {
       MessageBody: JSON.stringify({ run_id }),
       MessageGroupId: undefined,
     }));
-    console.log(`[profile-complete] enqueued run ${run_id} to SQS`);
+    log.info("enqueued AI job", { run_id });
     return NextResponse.json({ ok: true, queued: true });
   }
 
@@ -78,7 +81,7 @@ export async function POST(req: NextRequest) {
   });
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
-    console.error(`[profile-complete] suggest-transforms ${res.status}: ${errBody}`);
+    log.error("suggest-transforms call failed", { run_id, status: res.status, body: errBody.slice(0, 500) });
   }
 
   return NextResponse.json({ ok: true });

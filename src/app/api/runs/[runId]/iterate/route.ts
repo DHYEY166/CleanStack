@@ -5,6 +5,9 @@ import { randomUUID } from "crypto";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import type { PipelineRun } from "@/lib/types";
 import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/runs/iterate" });
 
 const s3 = new S3Client({ region: awsRegion() });
 
@@ -68,7 +71,7 @@ export async function POST(
       iteration: currentIteration + 1,
     });
   } catch (err) {
-    console.error("[iterate]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

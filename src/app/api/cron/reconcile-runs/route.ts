@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { safeCompare } from "@/lib/secrets";
 import { query } from "@/lib/db";
 import { optionalEnv } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "GET /api/cron/reconcile-runs" });
 
 export const maxDuration = 30;
 
@@ -42,6 +45,6 @@ export async function GET(req: Request) {
   );
 
   const totalFixed = updated.length + pendingCleaned.length;
-  console.log(`[reconciler] Marked ${updated.length} stuck runs + ${pendingCleaned.length} orphan pending runs as failed`);
+  log.info("reconciled runs", { stuck_failed: updated.length, pending_failed: pendingCleaned.length });
   return NextResponse.json({ fixed: totalFixed, stuck: updated.map((r) => r.id), orphaned: pendingCleaned.map((r) => r.id) });
 }

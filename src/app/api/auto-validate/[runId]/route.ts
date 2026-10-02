@@ -8,6 +8,9 @@ import { query, queryOne } from "@/lib/db";
 import { meterBedrockCall } from "@/lib/bedrock-meter";
 import type { TransformRule, DataProfile } from "@/lib/types";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/auto-validate" });
 
 export const maxDuration = 120;
 
@@ -82,7 +85,7 @@ async function runConsultant(
     });
     return { votes: parseVotes(result.text, rules), usage: result.usage };
   } catch (e) {
-    console.error(`[auto-validate] ${persona} failed:`, e);
+    log.error("committee persona failed", { persona, err: e });
     // On error, approve all LOW risk, reject HIGH risk (conservative fallback)
     return { votes: rules.map((r) => ({
       rule_id: r.id,
@@ -98,7 +101,7 @@ export async function POST(
 ) {
   const expectedSecret = optionalEnv("WEBHOOK_SECRET") ?? "";
   if (!expectedSecret) {
-    console.error("[auto-validate] WEBHOOK_SECRET not set — rejecting request");
+    log.error("WEBHOOK_SECRET not set; rejecting request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const secret = req.headers.get("x-webhook-secret");
@@ -257,7 +260,7 @@ ${responseFormat}`,
         })
       );
     } catch (sqsErr) {
-      console.error(`[auto-validate] SQS send failed for run ${runId} — reconciler will retry:`, sqsErr);
+      log.error("SQS send failed; run left queued without a message (no automatic re-enqueue)", { run_id: runId, err: sqsErr });
     }
   } else {
     // No approved rules — mark completed, nothing to execute

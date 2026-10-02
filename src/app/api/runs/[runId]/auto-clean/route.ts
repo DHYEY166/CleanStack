@@ -5,6 +5,9 @@ import { randomUUID } from "crypto";
 import { queryOne, queryOneWithTeam } from "@/lib/db";
 import type { PipelineRun } from "@/lib/types";
 import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/runs/auto-clean" });
 
 const s3 = new S3Client({ region: awsRegion() });
 
@@ -68,7 +71,7 @@ export async function POST(
       auto_mode: true,
     });
   } catch (err) {
-    console.error("[auto-clean]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

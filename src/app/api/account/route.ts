@@ -4,6 +4,9 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { query, queryOne, withTransaction } from "@/lib/db";
 import { keyDirectory, purgePrefix, type PurgeResult } from "@/lib/s3-erase";
 import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "DELETE /api/account" });
 
 const s3 = new S3Client({ region: awsRegion() });
 
@@ -38,7 +41,7 @@ export async function DELETE(req: NextRequest) {
 
   // The user id becomes an S3 prefix; never let an unexpected value widen it.
   if (!SAFE_ID.test(userId)) {
-    console.error("[DELETE /api/account] unexpected user id format; refusing S3 purge");
+    log.error("unexpected user id format; refusing S3 purge");
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 
@@ -48,7 +51,7 @@ export async function DELETE(req: NextRequest) {
     rawBucket = requireEnv("S3_RAW_BUCKET");
     procBucket = requireEnv("S3_PROCESSED_BUCKET");
   } catch (err) {
-    console.error("[DELETE /api/account] refusing partial erasure:", (err as Error).message);
+    log.error("refusing partial erasure", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 
@@ -84,19 +87,19 @@ export async function DELETE(req: NextRequest) {
       // Missing s3:ListBucketVersions: only current versions were removed and
       // older versions may survive on a versioned bucket. Surfaced in the
       // response and logs; fix the IAM policy (see README, security model).
-      console.error("[DELETE /api/account] ListObjectVersions denied; only current versions purged for", unversioned);
+      log.error("ListObjectVersions denied; only current versions purged", { prefixes: unversioned });
     }
 
     const failures = purges.flatMap((p) => p.errors);
     if (failures.length) {
-      console.error("[DELETE /api/account] S3 purge incomplete:", failures.slice(0, 20));
+      log.error("S3 purge incomplete; database left intact", { failures: failures.slice(0, 20), failure_count: failures.length });
       return NextResponse.json(
         { error: "Could not delete all stored files. No account data was removed; please retry." },
         { status: 500 }
       );
     }
   } catch (err) {
-    console.error("[DELETE /api/account] S3 purge failed:", err);
+    log.error("S3 purge failed; database left intact", { err });
     return NextResponse.json(
       { error: "Could not delete all stored files. No account data was removed; please retry." },
       { status: 500 }
@@ -126,7 +129,7 @@ export async function DELETE(req: NextRequest) {
       message: "All account data permanently deleted.",
     });
   } catch (err) {
-    console.error("[DELETE /api/account] DB delete failed after S3 purge:", err);
+    log.error("DB delete failed after S3 purge", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

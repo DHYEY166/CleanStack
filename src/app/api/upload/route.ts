@@ -8,6 +8,9 @@ import { getCachedQuota } from "@/lib/quota-cache";
 import { uploadLimiter, checkRateLimit } from "@/lib/rate-limit";
 import type { PipelineRun } from "@/lib/types";
 import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "POST /api/upload" });
 
 const s3 = new S3Client({ region: awsRegion() });
 
@@ -95,7 +98,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ presigned_url: presignedUrl, run_id: run.id, s3_key: s3Key });
   } catch (err) {
-    console.error("[POST /api/upload]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -1,4 +1,7 @@
 import { query, queryOne } from "@/lib/db";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ component: "bedrock-meter" });
 
 const PRICING: Record<string, { inputPer1M: number; outputPer1M: number }> = {
   "us.anthropic.claude-sonnet-4-6": { inputPer1M: 3.0, outputPer1M: 15.0 },
@@ -26,7 +29,7 @@ export async function meterBedrockCall(opts: {
     `INSERT INTO bedrock_usage (team_id, run_id, model, call_type, input_tokens, output_tokens, estimated_cost_usd)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [teamId, runId, model, callType, inputTokens, outputTokens, cost]
-  ).catch((e) => console.error("[bedrock-meter] insert failed:", e));
+  ).catch((e) => log.error("bedrock usage insert failed", { err: e, team_id: teamId, call_type: callType }));
 }
 
 export async function checkAiSpendCap(teamId: string): Promise<{

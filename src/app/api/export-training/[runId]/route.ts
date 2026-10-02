@@ -6,6 +6,9 @@ import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 import { deliverableFormat } from "@/lib/download";
 import { parseDeliverableRows, toTrainingFormat, type TrainingFormat } from "@/lib/training-export";
 import { requireEnv, awsRegion } from "@/lib/env";
+import { logger } from "@/lib/logger";
+
+const log = logger.child({ route: "GET /api/export-training" });
 
 const s3 = new S3Client({ region: awsRegion() });
 
@@ -129,7 +132,7 @@ export async function GET(
       },
     });
   } catch (err) {
-    console.error("[export-training]", err);
+    log.error("unhandled error", { err });
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
