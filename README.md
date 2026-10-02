@@ -94,9 +94,9 @@ The Bedrock model id and token prices live in `src/lib/ai-config.ts`. Lambda var
 Vercel builds and deploys `main`. The Lambdas, migrations and AWS resources are deployed by hand. [docs/deployment.md](docs/deployment.md) covers:
 
 - applying migrations 001–003 (`run-migration.mjs`, or the RDS Data API from CloudShell);
-- the zip-swap deploy for each Lambda in CloudShell;
+- the CloudShell zip-swap deploy for `cleanstack-profiler`, `cleanstack-executor`, `cleanstack-ai-trigger` and `cleanstack-drift`;
 - raw bucket CORS (PUT, GET, POST), the profiler trigger on all object create events, and processed bucket CORS;
-- EventBridge rules through API destinations with the `cleanstack-eventbridge-invoker` role: reconcile-runs every 5 minutes and purge-guests every hour;
+- EventBridge rules `cleanstack-reconciler-5min` (every 5 minutes) and `cleanstack-purge-guests-hourly` (every hour), which call the cron routes through API destinations as the `cleanstack-eventbridge-invoker` role;
 - the S3 lifecycle rule on the `guest_` prefix;
 - least-privilege IAM for the `cleanstack-vercel` user and for the Lambda roles.
 

@@ -43,16 +43,27 @@ PY
 
 There is no build or deploy script. Each function is deployed as its `handler.py` plus its pinned `requirements.txt` (ai-trigger has no dependencies beyond the standard library). The profiler and executor also attach the `AWSSDKPandas-Python312` layer, which provides pandas and numpy. The code is tested on pandas 2.2.3 and 3.0.6.
 
-**Zip-swap (CloudShell).** When only `handler.py` changed, keep the deployed package and replace the handler:
+All functions are in `us-east-1`:
+
+| Code | Function |
+|---|---|
+| `lambdas/profiler/handler.py` | `cleanstack-profiler` |
+| `lambdas/executor/handler.py` | `cleanstack-executor` |
+| `lambdas/ai-trigger/handler.py` | `cleanstack-ai-trigger` |
+| `lambdas/drift/handler.py` | `cleanstack-drift` |
+
+**Zip-swap (CloudShell).** When only `handler.py` changed, keep the deployed package and replace the handler. Upload each changed `handler.py` to CloudShell as `<name>/handler.py` (for example `executor/handler.py`), then run:
 
 ```bash
-FN=<function name>                       # for example cleanstack-executor
-curl -s -o current.zip "$(aws lambda get-function --function-name "$FN" --query Code.Location --output text)"
-rm -rf pkg && mkdir pkg && unzip -q current.zip -d pkg
-cp handler.py pkg/handler.py             # the file from lambdas/<name>/handler.py, uploaded to CloudShell
-(cd pkg && zip -qr ../new.zip .)
-aws lambda update-function-code --function-name "$FN" --zip-file fileb://new.zip
-aws lambda wait function-updated --function-name "$FN"
+for name in profiler executor ai-trigger drift; do     # keep only the ones you changed
+  FN="cleanstack-$name"
+  curl -s -o current.zip "$(aws lambda get-function --function-name "$FN" --region us-east-1 --query Code.Location --output text)"
+  rm -rf pkg && mkdir pkg && unzip -q current.zip -d pkg
+  cp "$name/handler.py" pkg/handler.py
+  (cd pkg && rm -f ../new.zip && zip -qr ../new.zip .)
+  aws lambda update-function-code --function-name "$FN" --region us-east-1 --zip-file fileb://new.zip >/dev/null
+  aws lambda wait function-updated --function-name "$FN" --region us-east-1 && echo "deployed $FN"
+done
 ```
 
 If `requirements.txt` changed, rebuild the package with `pip install -r requirements.txt -t pkg` instead, leaving out pandas and numpy, which come from the layer.
@@ -82,12 +93,14 @@ The profiler, ai-trigger and web app must share the same `WEBHOOK_SECRET`.
 - **Executor queue (`cleanstack-jobs`):** triggers the executor. Set the visibility timeout to at least the executor's timeout (AWS recommends 6×), and add a dead-letter queue with `maxReceiveCount` ≥ `EXECUTOR_MAX_ATTEMPTS`. `BatchSize: 1` keeps retries simple.
 - **AI jobs queue:** triggers ai-trigger. It is used only when `AI_QUEUE_ENABLED=true`.
 
-**EventBridge schedules.** Both routes are `GET` and require `Authorization: Bearer $CRON_SECRET`. `vercel.json` defines no crons, because Vercel Hobby crons run at most once a day. Create one EventBridge connection that sends that header, plus an API destination for each route. Attach both rules to the `cleanstack-eventbridge-invoker` role, which needs `events:InvokeApiDestination`.
+**EventBridge schedules.** Both cron routes are `GET` and require `Authorization: Bearer $CRON_SECRET`. `vercel.json` defines no crons, because Vercel Hobby crons run at most once a day. Instead, EventBridge rules call the routes through API destinations. Both destinations share the connection `cleanstack-reconciler-auth`, which sends that header. Both rules run as the role `cleanstack-eventbridge-invoker`. That role has one inline policy per destination, granting `events:InvokeApiDestination`: the original reconciler policy, plus `invoke-purge-guests`.
 
-| Rule | Schedule | Target |
-|---|---|---|
-| reconcile | `rate(5 minutes)` | `/api/cron/reconcile-runs`: marks runs stuck for 20 minutes as `failed` |
-| purge-guests | `rate(1 hour)` | `/api/cron/purge-guests`: erases up to 20 expired guests per call |
+| Rule | Schedule | API destination | Route |
+|---|---|---|---|
+| `cleanstack-reconciler-5min` | `rate(5 minutes)` | `cleanstack-reconciler-destination` | `/api/cron/reconcile-runs`: marks runs stuck for 20 minutes as `failed` |
+| `cleanstack-purge-guests-hourly` | `rate(1 hour)` | `cleanstack-purge-guests-destination` | `/api/cron/purge-guests`: erases up to 20 expired guests per call |
+
+If you rotate `CRON_SECRET`, update the connection `cleanstack-reconciler-auth` at the same time as Vercel.
 
 ## IAM
 

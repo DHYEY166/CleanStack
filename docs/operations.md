@@ -4,7 +4,7 @@
 
 | Symptom | What to check or do |
 |---|---|
-| Run stuck in `profiling`, `awaiting_ai`, `queued` or `running` | `reconcile-runs` marks these runs `failed` after 20 minutes, so first confirm the EventBridge rule is firing. For a run stuck in `queued`, search the log for `SQS send failed; run left queued without a message`. If you find it, re-send the message: `aws sqs send-message --queue-url "$SQS_QUEUE_URL" --message-body '{"run_id":"<id>"}'`. This is safe because execution is idempotent. |
+| Run stuck in `profiling`, `awaiting_ai`, `queued` or `running` | `reconcile-runs` marks these runs `failed` after 20 minutes, so first confirm that the EventBridge rule `cleanstack-reconciler-5min` is firing. For a run stuck in `queued`, search the log for `SQS send failed; run left queued without a message`. If you find it, re-send the message: `aws sqs send-message --queue-url "$SQS_QUEUE_URL" --message-body '{"run_id":"<id>"}'`. This is safe because execution is idempotent. |
 | Runs stay in `pending` after upload | The profiler trigger is missing `Post`. It must fire on all object create events. |
 | Run `failed` with `Attempt n/3 failed, retrying` in its history | SQS retries transient errors up to `EXECUTOR_MAX_ATTEMPTS` times, and the last attempt marks the run failed. Look up the run id in the executor's CloudWatch logs. |
 | Approved rule shows **Not applied** | This is expected when a rule is unsafe or invalid. The page shows the reason, and the rest of the run is unaffected. |
@@ -15,4 +15,4 @@
 | Rotating `WEBHOOK_SECRET` | Update Vercel and the profiler and ai-trigger Lambdas together. Requests fail with 401 while the values differ. |
 | AI spend | `GET /api/admin/ai-spend` with `x-admin-secret` lists this month's estimated spend per team. |
 | Guests see "Guest AI capacity is used up for today" | All guests together have reached $5 of estimated Bedrock spend since 00:00 UTC. The cap resets at midnight UTC (`GUEST_LIMITS.aiSpendAllGuestsPerDayUsd`). |
-| Guest data not being deleted | Check the purge-guests rule. Each call erases up to 20 expired guests. The `guest_` lifecycle rule removes S3 objects after 1 day even if the purge stops, but the database rows remain until the purge runs. |
+| Guest data not being deleted | Check the rule `cleanstack-purge-guests-hourly` and its `invoke-purge-guests` policy. Each call erases up to 20 expired guests. The `guest_` lifecycle rule removes S3 objects after 1 day even if the purge stops, but the database rows remain until the purge runs. |
