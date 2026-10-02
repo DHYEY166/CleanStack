@@ -57,6 +57,14 @@ export async function putObject(bucket: string, key: string, body: string) {
   await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: "text/csv" }));
 }
 
+/** Upload through a presigned POST from /api/upload, like the browser does. */
+export async function postUpload(upload: { url: string; fields: Record<string, string> }, body: string, filename = "raw.csv") {
+  const form = new FormData();
+  for (const [k, v] of Object.entries(upload.fields)) form.append(k, v);
+  form.append("file", new Blob([body], { type: upload.fields["Content-Type"] }), filename);
+  return fetch(upload.url, { method: "POST", body: form });
+}
+
 export async function purgeQueue(url: string) {
   await sqs.send(new PurgeQueueCommand({ QueueUrl: url }));
 }

@@ -11,10 +11,18 @@
  * outside test mode, and this module ignores the cookie outside test mode, so
  * the bypass cannot be used in a deployment even if the cookie is forged:
  * isTestMode() is false whenever VERCEL / AWS Lambda markers are present.
+ *
+ * Guests (src/lib/guest.ts): when there is no Clerk (or test) user, a valid
+ * signed `cs_guest` cookie makes `auth()` return the guest id (`guest_...`),
+ * which is then used as team_id like any user id. Guests have no email.
+ * Without GUEST_COOKIE_SECRET guest cookies are ignored.
  */
 import { auth as clerkAuth, currentUser as clerkCurrentUser, clerkClient } from "@clerk/nextjs/server";
 import { cookies } from "next/headers";
 import { isTestMode } from "@/lib/test-mode";
+import { GUEST_COOKIE, guestFromCookie, isGuestId } from "@/lib/guest";
+
+export { isGuestId } from "@/lib/guest";
 
 export const TEST_USER_COOKIE = "cs_test_user";
 
@@ -35,14 +43,19 @@ async function testUserId(): Promise<string | null> {
   return isValidTestUserId(value) ? value : null;
 }
 
-/** `{ userId }` of the signed-in user, or `{ userId: null }`. */
-export async function auth(): Promise<{ userId: string | null }> {
-  if (isTestMode()) return { userId: await testUserId() };
-  const { userId } = await clerkAuth();
-  return { userId };
+async function guestUserId(): Promise<string | null> {
+  const session = await guestFromCookie((await cookies()).get(GUEST_COOKIE)?.value);
+  return session?.guestId ?? null;
 }
 
-/** Primary email of the signed-in user, or null. */
+/** `{ userId }` of the signed-in user or guest (`guest_...`), or `{ userId: null }`. */
+export async function auth(): Promise<{ userId: string | null }> {
+  if (isTestMode()) return { userId: (await testUserId()) ?? (await guestUserId()) };
+  const { userId } = await clerkAuth();
+  return { userId: userId ?? (await guestUserId()) };
+}
+
+/** Primary email of the signed-in user, or null (always null for guests). */
 export async function currentUserEmail(): Promise<string | null> {
   if (isTestMode()) {
     const id = await testUserId();
@@ -52,8 +65,9 @@ export async function currentUserEmail(): Promise<string | null> {
   return user?.primaryEmailAddress?.emailAddress ?? null;
 }
 
-/** First email address of any user by id (used by webhook-driven routes), or null. */
+/** First email address of any user by id (used by webhook-driven routes), or null. Guests have none. */
 export async function userEmailById(userId: string): Promise<string | null> {
+  if (isGuestId(userId)) return null;
   if (isTestMode()) return isValidTestUserId(userId) ? testUserEmail(userId) : null;
   const clerk = await clerkClient();
   const user = await clerk.users.getUser(userId).catch(() => null);

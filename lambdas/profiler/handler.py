@@ -569,6 +569,46 @@ def detect_signals(df: pd.DataFrame, column_stats: dict) -> dict:
     return signals
 
 
+# Upload size limits; keep in sync with src/lib/upload-limits.ts.
+GUEST_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+
+
+def max_upload_bytes(key: str) -> int:
+    """Per-file limit for the uploader: guests (key prefix guest_) 2 MB, others MAX_UPLOAD_MB (default 100)."""
+    if key.startswith("guest_"):
+        return GUEST_MAX_UPLOAD_BYTES
+    try:
+        mb = float(os.environ.get("MAX_UPLOAD_MB", "100"))
+    except ValueError:
+        mb = 100.0
+    return int((mb if mb > 0 else 100.0) * 1024 * 1024)
+
+
+def _mb(n: int) -> str:
+    v = n / (1024 * 1024)
+    return f"{v:.0f} MB" if v == int(v) else f"{v:.1f} MB"
+
+
+def _reject_too_large(run_id: str, size: int, limit: int) -> dict:
+    """Fail a pending run whose raw object exceeds the upload limit (no profiling, no AI)."""
+    message = f"File is {_mb(size)}; the upload limit is {_mb(limit)} per file."
+    print(f"[profiler] run {run_id}: {message}")
+    conn = get_db_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE pipeline_runs SET status = 'failed', error_message = %s, updated_at = now() "
+            "WHERE id = %s AND status = 'pending' RETURNING id",
+            (message, run_id),
+        )
+        claimed = cur.fetchone()
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return {"statusCode": 200, "run_id": run_id, "rejected": "too_large" if claimed else "already_claimed"}
+
+
 def handler(event, context):
     record = event["Records"][0]["s3"]
     bucket = record["bucket"]["name"]
@@ -580,6 +620,13 @@ def handler(event, context):
         return {"statusCode": 200, "body": "skipped"}
 
     obj        = s3.get_object(Bucket=bucket, Key=key)
+    size       = int(obj.get("ContentLength") or 0)
+    limit      = max_upload_bytes(key)
+    if size > limit:
+        # Backstop for the presigned POST policy (content-length-range): never read
+        # an oversized object into memory. Mark the run failed and stop.
+        obj["Body"].close()
+        return _reject_too_large(parts[2], size, limit)
     file_bytes = obj["Body"].read()
     # Strip UTF-8 BOM if present (prevents invisible char in first column name)
     if file_bytes[:3] == b'\xef\xbb\xbf':

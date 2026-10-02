@@ -151,6 +151,22 @@ CREATE TABLE IF NOT EXISTS ai_spend_limits (
   CHECK (soft_cap_usd >= 0 AND hard_cap_usd >= soft_cap_usd)
 );
 
+-- Guest sessions (also applied via 003_guest_sessions.sql)
+CREATE TABLE IF NOT EXISTS guest_sessions (
+  id TEXT PRIMARY KEY,
+  ip_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  CHECK (left(id, 6) = 'guest_')
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_ip_created
+  ON guest_sessions (ip_hash, created_at);
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_created
+  ON guest_sessions (created_at);
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_expires
+  ON guest_sessions (expires_at);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_pipelines_team_id ON pipelines(team_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline_id ON pipeline_runs(pipeline_id);

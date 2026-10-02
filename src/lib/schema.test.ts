@@ -29,7 +29,7 @@ const migrated = tables(migrationFiles.map((f) => readFileSync(join(MIGRATIONS, 
 const APP_TABLES = [
   "pipelines", "pipeline_runs", "data_profiles", "transform_rules", "approval_reviews",
   "schema_snapshots", "pipeline_templates", "pipeline_destinations", "subscriptions",
-  "bedrock_usage", "ai_spend_limits",
+  "bedrock_usage", "ai_spend_limits", "guest_sessions",
 ];
 
 describe("database schema", () => {
@@ -42,6 +42,11 @@ describe("database schema", () => {
     for (const t of ["bedrock_usage", "ai_spend_limits"]) {
       expect(migrated.get(t), t).toEqual(schema.get(t));
     }
+  });
+
+  it("existing databases get guest_sessions from 003", () => {
+    expect(migrationFiles).toContain("003_guest_sessions.sql");
+    expect(migrated.get("guest_sessions")).toEqual(schema.get("guest_sessions"));
   });
 
   it("bedrock_usage has every column bedrock-meter inserts", () => {

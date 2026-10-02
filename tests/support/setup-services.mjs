@@ -4,7 +4,7 @@
 //
 //   1. Postgres: apply src/lib/schema.sql + migrations (run-migration.mjs, DATABASE_URL path)
 //   2. LocalStack S3: raw + processed buckets, versioning enabled (account
-//      deletion must purge every version), CORS for the browser presigned PUT/GET
+//      deletion must purge every version), CORS for the browser presigned POST/GET
 //   3. LocalStack SQS: executor queue + raw-events queue, and an S3 -> SQS
 //      ObjectCreated notification on the raw bucket (stands in for the
 //      profiler Lambda trigger; tests/e2e/lambda_worker.py consumes it)
@@ -51,7 +51,7 @@ for (const Bucket of [env.S3_RAW_BUCKET, env.S3_PROCESSED_BUCKET]) {
   await s3.send(new PutBucketVersioningCommand({ Bucket, VersioningConfiguration: { Status: "Enabled" } }));
   await s3.send(new PutBucketCorsCommand({
     Bucket,
-    CORSConfiguration: { CORSRules: [{ AllowedOrigins: origins, AllowedMethods: ["GET", "PUT", "HEAD"], AllowedHeaders: ["*"], ExposeHeaders: ["ETag"], MaxAgeSeconds: 600 }] },
+    CORSConfiguration: { CORSRules: [{ AllowedOrigins: origins, AllowedMethods: ["GET", "PUT", "POST", "HEAD"], AllowedHeaders: ["*"], ExposeHeaders: ["ETag"], MaxAgeSeconds: 600 }] },
   }));
 }
 

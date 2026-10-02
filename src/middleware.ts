@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
 import { isTestMode } from "@/lib/test-mode";
+import { GUEST_COOKIE, guestFromCookie } from "@/lib/guest";
 
 const isProtectedRoute = createRouteMatcher([
   "/dashboard(.*)",
@@ -21,16 +22,25 @@ const isProtectedRoute = createRouteMatcher([
 
 const isRootPath = createRouteMatcher(["/"]);
 
+/** A valid signed guest cookie (src/lib/guest.ts); always false when guest access is off. */
+async function hasGuestSession(req: NextRequest): Promise<boolean> {
+  return (await guestFromCookie(req.cookies.get(GUEST_COOKIE)?.value)) !== null;
+}
+
 const clerkHandler = clerkMiddleware(async (auth, req) => {
   if (isProtectedRoute(req)) {
+    // Clerk users first; otherwise a guest may pass, otherwise Clerk's normal redirect / 401.
+    const { userId } = await auth();
+    if (userId) return;
+    if (await hasGuestSession(req)) return;
     await auth.protect();
     return;
   }
 
-  // Redirect authenticated users from landing page → dashboard
+  // Redirect authenticated users (and guests) from landing page → dashboard
   if (isRootPath(req)) {
     const { userId } = await auth();
-    if (userId) {
+    if (userId || (await hasGuestSession(req))) {
       return NextResponse.redirect(new URL("/dashboard", req.url));
     }
   }
@@ -45,9 +55,9 @@ const clerkHandler = clerkMiddleware(async (auth, req) => {
 const TEST_USER_COOKIE = "cs_test_user"; // keep in sync with src/lib/auth.ts
 const TEST_USER_ID = /^user_test_[A-Za-z0-9_-]{1,64}$/;
 
-function testModeMiddleware(req: NextRequest) {
+async function testModeMiddleware(req: NextRequest) {
   const userId = req.cookies.get(TEST_USER_COOKIE)?.value;
-  const signedIn = userId !== undefined && TEST_USER_ID.test(userId);
+  const signedIn = (userId !== undefined && TEST_USER_ID.test(userId)) || (await hasGuestSession(req));
   if (isProtectedRoute(req) && !signedIn) {
     if (req.nextUrl.pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

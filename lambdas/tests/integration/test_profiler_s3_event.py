@@ -48,3 +48,32 @@ def test_profiler_handles_real_s3_notification(live_profiler, services, db, monk
     finally:
         with db.cursor() as cur:
             cur.execute("DELETE FROM pipelines WHERE id = %s", (pipeline_id,))
+
+
+def test_profiler_rejects_an_oversized_guest_upload_without_reading_it(live_profiler, services, db, monkeypatch):
+    """Backstop for the presigned POST size policy (LocalStack does not enforce POST policies)."""
+    s3 = services["s3"]
+    team = "guest_" + "A" * 22
+    pipeline_id, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+    key = f"{team}/{pipeline_id}/{run_id}/raw.csv"
+    with db.cursor() as cur:
+        cur.execute("INSERT INTO pipelines (id, name, owner_id, team_id) VALUES (%s, 'it', %s, %s)", (pipeline_id, team, team))
+        cur.execute("INSERT INTO pipeline_runs (id, pipeline_id, status, file_format, raw_s3_key) VALUES (%s, %s, 'pending', 'csv', %s)",
+                    (run_id, pipeline_id, key))
+    calls = []
+    monkeypatch.setattr(live_profiler.requests, "post", lambda url, **kw: calls.append(url))
+    try:
+        body = b"id,v\n" + b"1,x\n" * (2 * 1024 * 1024 // 4 + 10)  # just over 2 MB
+        s3.put_object(Bucket=os.environ["S3_RAW_BUCKET"], Key=key, ContentType="text/csv", Body=body)
+        event = {"Records": [{"s3": {"bucket": {"name": os.environ["S3_RAW_BUCKET"]}, "object": {"key": key}}}]}
+        assert live_profiler.handler(event, None) == {"statusCode": 200, "run_id": run_id, "rejected": "too_large"}
+        with db.cursor() as cur:
+            cur.execute("SELECT status, error_message FROM pipeline_runs WHERE id = %s", (run_id,))
+            status, message = cur.fetchone()
+        assert status == "failed"
+        assert message == "File is 2.0 MB; the upload limit is 2 MB per file."
+        assert calls == []  # no profile-complete webhook, so no AI
+    finally:
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM pipelines WHERE id = %s", (pipeline_id,))
+        s3.delete_object(Bucket=os.environ["S3_RAW_BUCKET"], Key=key)
