@@ -68,6 +68,8 @@ Rules for test-only code (see README, "Test-only switches"):
   is off without `CLEANSTACK_TEST_MODE=1` and when `VERCEL=1`.
 - Server code reads the user through `@/lib/auth`; eslint rejects `@clerk/nextjs/server`
   imports elsewhere, so the auth bypass keeps a single entry point.
+- Every AI call is preceded by `checkAiBudget(teamId, calls)` and followed by an awaited
+  `meterBedrockCall(...)` (`src/lib/bedrock-meter.ts`), so the guest and team caps see it.
 - AI calls take their model from `languageModel()` (`src/lib/ai-model.ts`), never `bedrock()`
   directly, so CI never reaches Bedrock.
 - Playwright's `webServer` inherits your shell's environment, and shell variables win over
