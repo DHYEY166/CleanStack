@@ -31,7 +31,7 @@ const DATABASE = "cleanstack";
  * e2e suites and is refused unless isTestMode() is true, so it can never be
  * switched on in a Vercel deployment.
  */
-function usePgDriver(): boolean {
+function pgDriverSelected(): boolean {
   const driver = optionalEnv("DB_DRIVER") ?? "data-api";
   if (driver !== "pg") return false;
   if (!isTestMode()) {
@@ -167,7 +167,7 @@ export async function query<T = unknown>(
   params: unknown[] = [],
   transactionId?: string
 ): Promise<T[]> {
-  if (usePgDriver()) return (await loadPg()).pgQuery<T>(text, params, transactionId);
+  if (pgDriverSelected()) return (await loadPg()).pgQuery<T>(text, params, transactionId);
   const { clusterArn, secretArn } = getArns();
   const { sql, parameters } = convertQuery(text, params);
 
@@ -199,7 +199,7 @@ export async function queryOne<T = unknown>(
 export async function withTransaction<T>(
   fn: (txId: string) => Promise<T>
 ): Promise<T> {
-  if (usePgDriver()) return (await loadPg()).pgWithTransaction(fn);
+  if (pgDriverSelected()) return (await loadPg()).pgWithTransaction(fn);
   const { clusterArn, secretArn } = getArns();
   const begin = await client.send(
     new BeginTransactionCommand({
