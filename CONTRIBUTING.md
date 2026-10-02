@@ -70,12 +70,21 @@ Rules for test-only code (see README, "Test-only switches"):
   imports elsewhere, so the auth bypass keeps a single entry point.
 - AI calls take their model from `languageModel()` (`src/lib/ai-model.ts`), never `bedrock()`
   directly, so CI never reaches Bedrock.
+- Playwright's `webServer` inherits your shell's environment, and shell variables win over
+  `tests/support/test-env.mjs`. Run e2e from a clean shell: an exported `CLEANSTACK_TEST_MODE`
+  turns the guard servers (:3101, :3102) into test-mode servers and their tests fail.
 
 ## Conventions
 
 - **Configuration:** read environment variables through `src/lib/env.ts` (`requireEnv`,
   `optionalEnv`, `awsRegion`). Add new variables to `ENV_SPEC` and `.env.example`; a test enforces
   the latter.
+- **Guests:** a `guest_…` id (`src/lib/guest.ts`) is a normal `team_id`, so tenant queries need
+  no change. Anything new that costs money (AI, storage, email) or is irreversible must check
+  `isGuestId()` and apply the limits in `src/lib/guest-limits.ts`; add a test with a guest id.
+- **Uploads:** the browser uploads with a presigned POST from `/api/upload`. Size limits live in
+  `src/lib/upload-limits.ts` and are mirrored in `lambdas/profiler/handler.py`; change both
+  together.
 - **Logging (server):** use `logger.child({ route })` from `src/lib/logger.ts` and pass data as
   fields (`{ run_id, err }`). ESLint rejects `console.*` in `src/app/api` and `src/lib`.
 - **Secrets:** compare shared secrets with `safeCompare` from `src/lib/secrets.ts`.

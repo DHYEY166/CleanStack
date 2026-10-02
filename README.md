@@ -21,7 +21,8 @@ CleanStack is a web app for cleaning tabular files and documents with an AI-revi
 ```
 Browser ── Next.js 16 app on Vercel (Clerk auth, API routes) ── Aurora PostgreSQL (RDS Data API)
    │                │
-   │ presigned PUT  │ presigned GET (120 s) for downloads
+   │ presigned POST │ presigned GET (120 s) for downloads
+   │ (size-capped)  │
    ▼                ▼
 S3 raw bucket    S3 processed bucket  (output.<ext> + audit.csv per run)
    │ S3 event
@@ -45,7 +46,7 @@ Lambda: executor ── claims run, applies rules, writes deliverable + audit fi
 | Component | Where it lives | Notes |
 |---|---|---|
 | Web app + API | `src/` (Next.js App Router) | Deployed on Vercel |
-| Profiler Lambda | `lambdas/profiler/handler.py` | S3 PUT trigger |
+| Profiler Lambda | `lambdas/profiler/handler.py` | S3 `ObjectCreated` trigger (must include `Post`; uploads are presigned POSTs) |
 | AI trigger Lambda | `lambdas/ai-trigger/handler.py` | SQS trigger, calls `/api/suggest-transforms` |
 | Executor Lambda | `lambdas/executor/handler.py` | SQS trigger |
 | Drift Lambda | `lambdas/drift/handler.py` | SNS trigger |
@@ -128,9 +129,9 @@ PYTHON=python npm run test:e2e                   # tests/e2e (playwright.config.
 
 | Suite | Command | What it covers |
 |---|---|---|
-| Integration (TS) | `npm run test:integration` | upload presigned PUT → S3 notification → profiler → suggest-transforms (fake model) → approve → executor SQS message → executor → presigned download fetch; account deletion purging every object version and delete marker; approve-rules claim under 8 concurrent requests; pg driver result shapes |
+| Integration (TS) | `npm run test:integration` | upload presigned POST → S3 notification → profiler → suggest-transforms (fake model) → approve → executor SQS message → executor → presigned download fetch; account deletion purging every object version and delete marker; approve-rules claim under 8 concurrent requests; pg driver result shapes; guest sessions (signed cookie, `guest_sessions` row, per-IP cap) and a guest's 2 MB upload refused by the profiler |
 | Integration (Python) | `CLEANSTACK_INTEGRATION=1 pytest lambdas/tests/integration` | executor idempotency with duplicate SQS deliveries (separate and same batch), retry and last-attempt semantics, profiler on a real S3 notification |
-| E2E | `npm run test:e2e` | sign in → upload a CSV → suggested rules → approve → completion → download with no `__orig_*` columns; the auth bypass is off without the flag and on Vercel |
+| E2E | `npm run test:e2e` | sign in → upload a CSV → suggested rules → approve → completion → download with no `__orig_*` columns; guest session → upload → review, a guest's 2.1 MB file refused in the form and with 413; the auth bypass is off without the flag and on Vercel, and a forged guest cookie is not a session |
 
 All environment for these suites lives in `tests/support/test-env.mjs`. Variables already set in your shell win. `pytest lambdas/tests` without `CLEANSTACK_INTEGRATION=1` skips the integration directory, so the unit suite never needs containers. With the variable set, missing services are an error, not a skip.
 
@@ -176,6 +177,9 @@ The full contract is in `src/lib/env.ts`, and `.env.example` has a placeholder f
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | no | Rate limiting and quota cache. **Both are off when unset (fail open)** |
 | `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN` | no | Error reporting |
 | `LOG_LEVEL` | no (default `info`) | Threshold of the JSON logger |
+| `MAX_UPLOAD_MB` | no (default `100`) | Per-file upload limit for signed-in users. Guests are always 2 MB. Set the same value on the profiler Lambda |
+| `GUEST_COOKIE_SECRET` | no | HMAC key (≥ 32 chars) for the signed `cs_guest` cookie and for hashing guest IPs. **Guest access is off while it is unset.** Generate with `openssl rand -base64 48` |
+| `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | no | Cloudflare Turnstile check on `POST /api/guest`. Off when unset; set both or neither |
 
 Generate shared secrets with `openssl rand -hex 32`. Values shorter than 32 characters produce a startup warning.
 
@@ -185,7 +189,7 @@ The Bedrock model id and the token prices used for metering are in `src/lib/ai-c
 
 | Function | Variables read by the code |
 |---|---|
-| profiler | `DATABASE_URL`, `APP_URL`, `WEBHOOK_SECRET`, `SENTRY_DSN` (optional), `AWS_REGION` |
+| profiler | `DATABASE_URL`, `APP_URL`, `WEBHOOK_SECRET`, `MAX_UPLOAD_MB` (optional, default 100; keep equal to the web app's), `SENTRY_DSN` (optional), `AWS_REGION` |
 | ai-trigger | `APP_URL`, `WEBHOOK_SECRET` |
 | executor | `DB_SECRET_ARN`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SNS_DRIFT_TOPIC_ARN` (optional), `EXECUTOR_MAX_ATTEMPTS` (optional, default 3), `SEMANTIC_DEDUP_MAX_ROWS` (optional, default 500000), `EXECUTOR_RESERVE_S` (optional, default 120: seconds of the invocation `semantic_deduplicate` leaves for writing the output, at most 25% of it), `SENTRY_DSN` (optional), `AWS_REGION` |
 | drift | `DB_SECRET_ARN`, `AWS_REGION` |
@@ -198,7 +202,7 @@ Python dependencies are pinned in `lambdas/*/requirements.txt`. At runtime panda
 
 **Web app.** Vercel builds `main` (`npm run build`). The build needs no secrets because configuration is validated per request. Set the variables above in the Vercel project.
 
-**Migrations.** Run `run-migration.mjs` (see above) **before** deploying code that needs new tables. Migration `002_ai_usage_tables.sql` creates `bedrock_usage` and `ai_spend_limits`. Without them, AI metering and the spend cap do not work.
+**Migrations.** Run `run-migration.mjs` (see above) **before** deploying code that needs new tables. Migration `002_ai_usage_tables.sql` creates `bedrock_usage` and `ai_spend_limits`. Without them, AI metering and the spend cap do not work. Migration `003_guest_sessions.sql` creates `guest_sessions`; `POST /api/guest` returns 500 without it.
 
 **Lambdas.** Each Lambda is deployed as its handler plus its `requirements.txt`. The profiler and executor also attach the AWSSDKPandas layer. There is no build or deploy script in the repo yet, so build the zip from the pinned requirements (excluding pandas/numpy, which the layer provides) and update the function:
 
@@ -210,6 +214,8 @@ aws lambda update-function-code --function-name cleanstack-executor \
 **AWS settings the code relies on** (configure them in AWS; they cannot be checked from this repo):
 
 - **Executor SQS queue:** visibility timeout ≥ the executor Lambda timeout (AWS recommends 6×), and a dead-letter queue with `maxReceiveCount` ≥ `EXECUTOR_MAX_ATTEMPTS`. The handler does not return partial batch failures, so one failing record retries the whole batch. That is safe because execution is idempotent, but `BatchSize: 1` keeps retries simple.
+- **Raw bucket CORS:** allow `POST` (and `PUT` for older clients) from the app origin. Uploads are presigned POSTs (multipart form) so that the policy's `content-length-range` makes S3 reject an oversized body.
+- **Profiler S3 trigger:** the raw bucket's event notification must include `s3:ObjectCreated:Post` (or `s3:ObjectCreated:*`). A trigger on `s3:ObjectCreated:Put` alone never fires for browser uploads, and runs sit in `pending`.
 - **Processed bucket CORS:** allow `GET` from the app origin. The browser fetches the presigned URL for **Export As**; the plain download is a navigation and needs no CORS.
 - **IAM for the web app role:** `s3:PutObject` (raw), `s3:GetObject` (processed), and for account erasure `s3:ListBucketVersions`, `s3:ListBucket`, `s3:DeleteObject` and `s3:DeleteObjectVersion` on both buckets, plus `sqs:SendMessage` on both queues, `rds-data:ExecuteStatement`/`BeginTransaction`/`CommitTransaction`/`RollbackTransaction` on the cluster, `secretsmanager:GetSecretValue` on the DB secret, and `bedrock:InvokeModel` for the configured model.
 - **IAM for the executor:** the same S3 version permissions on the raw bucket. Without `s3:ListBucketVersions` it falls back to deleting only the two known raw keys.
@@ -242,12 +248,13 @@ What the code does today. Settings that live only in AWS are listed as such.
 - **Authentication.** Clerk. `src/middleware.ts` protects the app pages and user API routes, and each route also calls `auth()` and returns 401 without a user.
 - **Tenant isolation is enforced in application code**, not by the database. Every user query filters on `pipelines.team_id = <Clerk user id>`. `queryWithTeam()` sets `app.team_id` for the transaction, but **no Row-Level Security policies are defined** in `schema.sql`, so that setting currently has no effect. A missing `team_id` predicate in a new query would leak data across tenants.
 - **Service-to-service calls** (Lambdas → webhooks, cron, admin) use shared secrets compared with `safeCompare` (`src/lib/secrets.ts`: SHA-256 then `timingSafeEqual`). It fails closed when the expected secret is not configured.
-- **File access.** Uploads go straight to S3 with a 300 s presigned PUT; downloads use a 120 s presigned GET for the caller's own completed run. Files never pass through the serverless function.
+- **File access.** Uploads go straight to S3 with a 300 s presigned POST whose policy pins the key and content type and caps the size (`content-length-range`, `src/lib/upload-limits.ts`: 100 MB or `MAX_UPLOAD_MB`, guests 2 MB). `/api/upload` refuses a larger declared size with 413 and the profiler marks a run failed, without reading the object, when the stored object is over the limit; downloads use a 120 s presigned GET for the caller's own completed run. Files never pass through the serverless function.
 - **Data lifecycle.**
   - After a successful execution, the executor deletes every object version under the run's raw prefix (`{user}/{pipeline}/{run}/`), including `extracted_text.txt` (`auto_delete_raw`, on by default).
   - Raw files of **failed** runs are not deleted, and there are no S3 lifecycle rules in the repo.
   - `DELETE /api/account?confirm=true` purges every version and delete marker under the user's raw prefix and their pipelines' processed prefixes, then deletes the DB rows. If S3 fails it aborts before touching the DB.
 - **AI.** Uploaded content is sent to Amazon Bedrock and wrapped in `<user_data>` tags with an instruction to treat it as data. This reduces prompt-injection risk but does not prevent it, which is why rules need approval (or the committee in auto mode). The monthly AI spend cap is checked in `suggest-transforms` only.
+- **Guest access** (`src/lib/guest.ts`, off unless `GUEST_COOKIE_SECRET` is set). `POST /api/guest` issues an httpOnly, `SameSite=Lax`, `Secure` cookie `cs_guest` = `guest_<22 chars>.<expiry>.<HMAC-SHA256>`, valid for 24 h; `auth()` returns that `guest_…` id as the user id (it is the `team_id`), and only when no Clerk user is signed in. Sessions are recorded in `guest_sessions` with an HMAC of the client IP (never the raw IP); at most 5 per IP and 200 overall per 24 h. Turnstile is checked when `TURNSTILE_SECRET_KEY` is set. Guest quotas and blocked features are listed in `src/lib/guest-limits.ts`.
 - **Abuse limits.** Upstash sliding-window limits per user: 20 uploads/h, 50 AI calls/h, 30 chat messages/h. They fail open when Redis is not configured.
 - **Headers.** A CSP is set in `next.config.ts`. It allows `'unsafe-inline'` and `'unsafe-eval'` for scripts (needed by Next.js and Clerk without nonces).
 - **Secrets.** Nothing secret is committed. `.env.example` has placeholders only, and `run-migration.mjs` reads the database host from the environment. AWS account ids and ARNs from older commits remain in git history.
@@ -265,7 +272,7 @@ Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 - **Downloads are served as stored.** Deliverables produced before the sidecar split may still contain `__orig_*` columns. **Export As** and the training export strip them; the native download does not. Re-run those pipelines to regenerate them.
 - **Excel blanks are not counted as nulls** by the profiler (cells are read as empty strings). Before/after scores are still computed the same way.
 - **AI spend cap coverage.** The cap is checked before `suggest-transforms` only. Committee calls are metered but not blocked, and chat-builder calls are neither metered nor blocked.
-- **No upload size limit.** Large files can still exhaust the executor Lambda's memory or time. `semantic_deduplicate` (MinHash + LSH, a few seconds for 50k short texts) is skipped with a reason instead of running past the Lambda deadline, and above `SEMANTIC_DEDUP_MAX_ROWS` rows; other rules have no such guard.
+- **Upload size limit is per file only.** 100 MB (`MAX_UPLOAD_MB`) for users, 2 MB for guests. A file under the limit can still exhaust the executor Lambda's memory or time for expensive rules. `semantic_deduplicate` (MinHash + LSH, a few seconds for 50k short texts) is skipped with a reason instead of running past the Lambda deadline, and above `SEMANTIC_DEDUP_MAX_ROWS` rows; other rules have no such guard.
 - **Schema drift alerts** store their diff inside `column_definitions`, so the next alert reports a phantom `_diff` column.
 - **Templates** copy approved rules from all recent runs of a pipeline, not only the latest run.
 - **`middleware.ts`** uses the file convention that Next.js 16 deprecated in favour of `proxy.ts`. It still works; the rename is pending a test against real Clerk keys.
