@@ -106,7 +106,7 @@ Operations runbook: [docs/operations.md](docs/operations.md). Security model: [d
 
 - **No Row-Level Security.** Tenant isolation depends on every query filtering on `team_id`.
 - **No infrastructure as code.** Buckets, queues, IAM, Lambda settings and schedules cannot be reviewed or reproduced from this repo.
-- **No automatic re-enqueue.** If the SQS send after approval fails, the run stays `queued` until the reconciler marks it failed ([runbook](docs/operations.md)).
+- **No automatic re-enqueue.** If sending to the executor or AI jobs queue fails, the run is marked failed right away and the user has to upload the file again ([runbook](docs/operations.md)).
 - **Retention:** raw files of failed runs stay in S3, and `data_retention_days` is not enforced. The `guest_` lifecycle rule is the only exception.
 - **The AI budget is checked before a call and recorded after it.** Concurrent requests can overshoot a cap by the cost of the calls in flight. Costs are estimates, not the AWS bill.
 - **Upload limits are per file.** A file under the limit can still exhaust the executor's memory or time on expensive rules. Only `semantic_deduplicate` has a time and row guard.

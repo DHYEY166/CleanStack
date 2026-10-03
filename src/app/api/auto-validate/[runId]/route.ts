@@ -10,6 +10,7 @@ import { checkAiBudget, meterBedrockCall } from "@/lib/bedrock-meter";
 import type { TransformRule, DataProfile } from "@/lib/types";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { EXECUTOR_QUEUE_FAILED_MESSAGE, failRunAfterQueueError, queueErrorResponse } from "@/lib/queue-failure";
 
 const log = logger.child({ route: "POST /api/auto-validate" });
 
@@ -264,7 +265,6 @@ ${responseFormat}`,
   ]);
 
   if (approved.length > 0 && optionalEnv("SQS_QUEUE_URL")) {
-    // Set status before SQS so reconciler can pick up the run if SQS fails
     await queryOne("UPDATE pipeline_runs SET status = 'queued', updated_at = now() WHERE id = $1", [runId]);
     try {
       await sqs.send(
@@ -274,7 +274,11 @@ ${responseFormat}`,
         })
       );
     } catch (sqsErr) {
-      log.error("SQS send failed; run left queued without a message (no automatic re-enqueue)", { run_id: runId, err: sqsErr });
+      // Without a message the run would sit in 'queued' until reconcile-runs
+      // fails it 20 minutes later, so fail it now (src/lib/queue-failure.ts).
+      log.error("SQS send failed; marking run failed", { run_id: runId, err: sqsErr });
+      await failRunAfterQueueError(runId, "queued", EXECUTOR_QUEUE_FAILED_MESSAGE);
+      return queueErrorResponse(EXECUTOR_QUEUE_FAILED_MESSAGE);
     }
   } else {
     // No approved rules — mark completed, nothing to execute
