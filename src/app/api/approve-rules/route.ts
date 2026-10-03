@@ -4,6 +4,7 @@ import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { query, queryOne, queryOneWithTeam, withTransaction } from "@/lib/db";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { EXECUTOR_QUEUE_FAILED_MESSAGE, failRunAfterQueueError, queueErrorResponse } from "@/lib/queue-failure";
 
 const log = logger.child({ route: "POST /api/approve-rules" });
 
@@ -108,10 +109,11 @@ export async function POST(req: NextRequest) {
           })
         );
       } catch (sqsErr) {
-        // The run stays 'queued' with no message. Nothing re-enqueues it: the
-        // reconcile-runs cron only marks stale runs 'failed' (see README "Known
-        // limitations"). An operator can re-send {"run_id": ...} to the queue.
-        log.error("SQS send failed; run left queued without a message", { run_id, err: sqsErr });
+        // Without a message the run would sit in 'queued' until reconcile-runs
+        // fails it 20 minutes later, so fail it now (src/lib/queue-failure.ts).
+        log.error("SQS send failed; marking run failed", { run_id, err: sqsErr });
+        await failRunAfterQueueError(run_id, "queued", EXECUTOR_QUEUE_FAILED_MESSAGE);
+        return queueErrorResponse(EXECUTOR_QUEUE_FAILED_MESSAGE);
       }
     }
 

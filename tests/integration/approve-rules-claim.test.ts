@@ -69,6 +69,25 @@ describe("approve-rules claim", () => {
     expect(await receive(env("SQS_QUEUE_URL"), (m) => JSON.parse(m.Body!).run_id === runId, 1, 3)).toHaveLength(1);
   });
 
+  it("marks the run failed with a message when SendMessage really fails", async () => {
+    const user = newUser();
+    authState.userId = user;
+    const { runId, ruleIds } = await seedAwaitingApproval(user);
+    const body = { run_id: runId, rule_decisions: ruleIds.map((rule_id) => ({ rule_id, action: "approved", modifications: null })) };
+    const queueUrl = process.env.SQS_QUEUE_URL;
+    process.env.SQS_QUEUE_URL = queueUrl!.replace(/[^/]+$/, "cleanstack-test-no-such-queue");
+    try {
+      const res = await approveRules(request("/api/approve-rules", { method: "POST", body }));
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ run_status: "failed" });
+    } finally {
+      process.env.SQS_QUEUE_URL = queueUrl;
+    }
+    const run = await db.query("SELECT status, error_message FROM pipeline_runs WHERE id = $1", [runId]);
+    expect(run.rows[0].status).toBe("failed");
+    expect(run.rows[0].error_message).toMatch(/Could not queue this run for execution/);
+  });
+
   it("another team cannot approve the run", async () => {
     const owner = newUser();
     const { runId, ruleIds } = await seedAwaitingApproval(owner);

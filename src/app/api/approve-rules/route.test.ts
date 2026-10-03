@@ -61,6 +61,30 @@ describe("POST /api/approve-rules", () => {
     expect(sqsSend).not.toHaveBeenCalled();
   });
 
+  it("marks the run failed and returns 503 when the SQS send fails", async () => {
+    queryOne.mockImplementation(async (sql: string) =>
+      sql.includes("RETURNING id") ? { id: RUN } : null);
+    sqsSend.mockRejectedValueOnce(new Error("AWS.SimpleQueueService.NonExistentQueue"));
+    const res = await post({ run_id: RUN, rule_decisions: decisions });
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.run_status).toBe("failed");
+    expect(body.error).toMatch(/Could not queue this run for execution/);
+    const fail = queryOne.mock.calls.find((c) => String(c[0]).includes("SET status = 'failed'"))!;
+    expect(String(fail[0])).toContain("WHERE id = $1 AND status = $2");
+    expect(fail[1]).toEqual([RUN, "queued", body.error]);
+  });
+
+  it("still returns 503 when marking the run failed also fails", async () => {
+    queryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("SET status = 'failed'")) throw new Error("db down");
+      return sql.includes("RETURNING id") ? { id: RUN } : null;
+    });
+    sqsSend.mockRejectedValueOnce(new Error("timeout"));
+    const res = await post({ run_id: RUN, rule_decisions: decisions });
+    expect(res.status).toBe(503);
+  });
+
   it("validates decisions", async () => {
     expect((await post({ run_id: RUN, rule_decisions: [{ rule_id: 1, action: "maybe" }] })).status).toBe(400);
   });
