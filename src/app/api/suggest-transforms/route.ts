@@ -369,7 +369,8 @@ IMPORTANT RULES:
       if (!avRes.ok) {
         const body = await avRes.text().catch(() => "");
         log.error("auto-validate call failed", { run_id, status: avRes.status, body: body.slice(0, 500) });
-        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
+        // Keep the message if auto-validate already failed the run (e.g. queue send error).
+        await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1 AND status <> 'failed'",
           [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
       }
     } else {
@@ -716,7 +717,8 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
     if (!avRes.ok) {
       const body = await avRes.text().catch(() => "");
       log.error("auto-validate call failed", { run_id, status: avRes.status, body: body.slice(0, 500) });
-      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1",
+      // Keep the message if auto-validate already failed the run (e.g. queue send error).
+      await queryOne("UPDATE pipeline_runs SET status = 'failed', error_message = $2, updated_at = now() WHERE id = $1 AND status <> 'failed'",
         [run_id, `auto-validate error ${avRes.status}: ${body.slice(0, 200)}`]);
     }
   } else {

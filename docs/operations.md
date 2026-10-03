@@ -4,7 +4,8 @@
 
 | Symptom | What to check or do |
 |---|---|
-| Run stuck in `profiling`, `awaiting_ai`, `queued` or `running` | `reconcile-runs` marks these runs `failed` after 20 minutes, so first confirm that the EventBridge rule `cleanstack-reconciler-5min` is firing. For a run stuck in `queued`, search the log for `SQS send failed; run left queued without a message`. If you find it, re-send the message: `aws sqs send-message --queue-url "$SQS_QUEUE_URL" --message-body '{"run_id":"<id>"}'`. This is safe because execution is idempotent. |
+| Run stuck in `profiling`, `awaiting_ai`, `queued` or `running` | `reconcile-runs` marks these runs `failed` after 20 minutes, so first confirm that the EventBridge rule `cleanstack-reconciler-5min` is firing. |
+| Run `failed` with "Could not queue this run …" | Sending to SQS failed (log `SQS send failed; marking run failed` or `AI jobs SQS send failed; marking run failed`), so the route failed the run and returned 503. Check the queue URL and the `sqs:SendMessage` permission of `cleanstack-vercel`. The user retries by uploading again. |
 | Runs stay in `pending` after upload | The profiler trigger is missing `Post`. It must fire on all object create events. |
 | Run `failed` with `Attempt n/3 failed, retrying` in its history | SQS retries transient errors up to `EXECUTOR_MAX_ATTEMPTS` times, and the last attempt marks the run failed. Look up the run id in the executor's CloudWatch logs. |
 | Approved rule shows **Not applied** | This is expected when a rule is unsafe or invalid. The page shows the reason, and the rest of the run is unaffected. |

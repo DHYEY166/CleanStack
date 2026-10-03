@@ -4,6 +4,7 @@ import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { queryOne } from "@/lib/db";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { AI_QUEUE_FAILED_MESSAGE, failRunAfterQueueError, queueErrorResponse } from "@/lib/queue-failure";
 
 const log = logger.child({ route: "POST /api/webhooks/profile-complete" });
 
@@ -60,11 +61,19 @@ export async function POST(req: NextRequest) {
 
   if (AI_QUEUE_ENABLED) {
     // Async path: enqueue and return immediately — profiler no longer blocks
-    await sqs.send(new SendMessageCommand({
-      QueueUrl: requireEnv("AI_JOBS_QUEUE_URL"),
-      MessageBody: JSON.stringify({ run_id }),
-      MessageGroupId: undefined,
-    }));
+    try {
+      await sqs.send(new SendMessageCommand({
+        QueueUrl: requireEnv("AI_JOBS_QUEUE_URL"),
+        MessageBody: JSON.stringify({ run_id }),
+        MessageGroupId: undefined,
+      }));
+    } catch (sqsErr) {
+      // Without a message the run would sit in 'awaiting_ai' until
+      // reconcile-runs fails it, so fail it now (src/lib/queue-failure.ts).
+      log.error("AI jobs SQS send failed; marking run failed", { run_id, err: sqsErr });
+      await failRunAfterQueueError(run_id, "awaiting_ai", AI_QUEUE_FAILED_MESSAGE);
+      return queueErrorResponse(AI_QUEUE_FAILED_MESSAGE);
+    }
     log.info("enqueued AI job", { run_id });
     return NextResponse.json({ ok: true, queued: true });
   }
