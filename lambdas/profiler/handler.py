@@ -15,6 +15,7 @@ except ImportError:
 import json
 import io
 import re
+import time
 import boto3
 import psycopg2
 import requests
@@ -299,6 +300,31 @@ DOMAIN_KEYWORDS = {
 }
 
 
+# Aurora Serverless v2 auto-pause: a connection to a paused cluster normally waits while it
+# resumes (~15s, 30s+ after a pause longer than 24h), but AWS recommends retrying failed
+# connections, since a burst of connections during a resume can fail. A failed connect ran no
+# SQL, so retrying it is safe. Authentication errors are not retried. Same helper in every
+# Lambda that connects (profiler, executor, drift); each Lambda ships as one handler.py.
+DB_CONNECT_RETRY_BUDGET_S = 35
+
+
+def _connect_with_resume_retry(**kwargs):
+    deadline = time.monotonic() + DB_CONNECT_RETRY_BUDGET_S
+    delay, logged = 1, False
+    while True:
+        try:
+            return psycopg2.connect(**kwargs)
+        except psycopg2.OperationalError as e:
+            if "authentication failed" in str(e) or time.monotonic() + delay > deadline:
+                raise
+            if not logged:
+                print(f"[db] connect failed, database may be resuming from auto-pause; retrying "
+                      f"for up to {DB_CONNECT_RETRY_BUDGET_S}s: {str(e).strip()[:200]}")
+                logged = True
+            time.sleep(delay)
+            delay = min(delay * 2, 8)
+
+
 def get_db_conn():
     from urllib.parse import urlparse
     url = os.environ["DATABASE_URL"]
@@ -306,7 +332,7 @@ def get_db_conn():
     host, port, user, dbname = p.hostname, p.port or 5432, p.username, p.path.lstrip("/")
     rds = boto3.client("rds", region_name=os.environ.get("AWS_REGION", "us-east-1"))
     token = rds.generate_db_auth_token(DBHostname=host, Port=port, DBUsername=user)
-    return psycopg2.connect(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
+    return _connect_with_resume_retry(host=host, port=port, user=user, password=token, dbname=dbname, sslmode="require")
 
 
 def detect_format(key: str, content_type: str, file_bytes: bytes = b"") -> str:

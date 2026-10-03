@@ -6,7 +6,9 @@ import { logger } from "@/lib/logger";
 
 const log = logger.child({ route: "GET /api/cron/reconcile-runs" });
 
-export const maxDuration = 30;
+// Room for the first query to wait while Aurora resumes from auto-pause (up to
+// 35s, src/lib/db-resume.ts): this rule runs every 4 hours, so the DB is usually paused.
+export const maxDuration = 60;
 
 const STUCK_AFTER_MINUTES = 20;
 const PENDING_ORPHAN_AFTER_MINUTES = 60;

@@ -10,6 +10,7 @@ import {
 import { ConfigError, awsRegion, optionalEnv, requireEnv } from "@/lib/env";
 import { parseDataApiString } from "@/lib/db-shape";
 import { isTestMode } from "@/lib/test-mode";
+import { withResumeRetry } from "@/lib/db-resume";
 
 const client = new RDSDataClient({
   region: awsRegion(),
@@ -171,7 +172,8 @@ export async function query<T = unknown>(
   const { clusterArn, secretArn } = getArns();
   const { sql, parameters } = convertQuery(text, params);
 
-  const result = await client.send(
+  // Every Data API call waits while the cluster resumes from auto-pause (src/lib/db-resume.ts).
+  const result = await withResumeRetry("ExecuteStatement", () => client.send(
     new ExecuteStatementCommand({
       resourceArn: clusterArn,
       secretArn: secretArn,
@@ -181,7 +183,7 @@ export async function query<T = unknown>(
       transactionId,
       includeResultMetadata: true,
     })
-  );
+  ));
 
   if (!result.columnMetadata || !result.records) return [];
   return recordsToRows<T>(result.columnMetadata, result.records);
@@ -201,32 +203,32 @@ export async function withTransaction<T>(
 ): Promise<T> {
   if (pgDriverSelected()) return (await loadPg()).pgWithTransaction(fn);
   const { clusterArn, secretArn } = getArns();
-  const begin = await client.send(
+  const begin = await withResumeRetry("BeginTransaction", () => client.send(
     new BeginTransactionCommand({
       resourceArn: clusterArn,
       secretArn: secretArn,
       database: DATABASE,
     })
-  );
+  ));
   const txId = begin.transactionId!;
   try {
     const result = await fn(txId);
-    await client.send(
+    await withResumeRetry("CommitTransaction", () => client.send(
       new CommitTransactionCommand({
         resourceArn: clusterArn,
         secretArn: secretArn,
         transactionId: txId,
       })
-    );
+    ));
     return result;
   } catch (e) {
-    await client.send(
+    await withResumeRetry("RollbackTransaction", () => client.send(
       new RollbackTransactionCommand({
         resourceArn: clusterArn,
         secretArn: secretArn,
         transactionId: txId,
       })
-    );
+    ));
     throw e;
   }
 }

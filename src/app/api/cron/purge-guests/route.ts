@@ -10,7 +10,9 @@ const log = logger.child({ route: "GET /api/cron/purge-guests" });
 
 const s3 = new S3Client({ region: awsRegion() });
 
-export const maxDuration = 60;
+// Room for up to 35s of Aurora resume wait (src/lib/db-resume.ts) before the batch:
+// this rule runs every 4 hours, so the DB is usually paused.
+export const maxDuration = 120;
 
 /** Guests erased per call; a backlog drains over the next calls. */
 export const PURGE_BATCH = 20;
