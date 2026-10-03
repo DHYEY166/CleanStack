@@ -119,4 +119,4 @@ Operations runbook: [docs/operations.md](docs/operations.md). Security model: [d
 
 ## License
 
-No `LICENSE` file has been committed yet.
+[MIT](LICENSE) © 2026 Dhyey Desai
