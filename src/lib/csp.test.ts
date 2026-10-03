@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCsp } from "@/lib/csp";
 
-// The exact policy shipped before the CSP moved out of next.config.ts.
+// The exact production policy (no test flag, no Turnstile).
 const PRODUCTION_CSP = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://clerk.com https://*.clerk.accounts.dev https://js.sentry-cdn.com https://*.sentry.io",
@@ -10,6 +10,7 @@ const PRODUCTION_CSP = [
   "img-src 'self' data: blob: https:",
   "connect-src 'self' https://*.sentry.io https://*.ingest.sentry.io https://*.clerk.accounts.dev https://*.clerk.com wss://*.clerk.accounts.dev https://sqs.us-east-1.amazonaws.com https://*.s3.amazonaws.com https://*.s3.us-east-1.amazonaws.com",
   "frame-src 'none'",
+  "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -17,7 +18,7 @@ const PRODUCTION_CSP = [
 ].join("; ");
 
 describe("buildCsp", () => {
-  it("is byte-identical to the previous production policy without the test flag", () => {
+  it("is byte-identical to the production policy without the test flag", () => {
     expect(buildCsp({})).toBe(PRODUCTION_CSP);
   });
 
@@ -29,6 +30,10 @@ describe("buildCsp", () => {
     const csp = buildCsp({ CLEANSTACK_TEST_MODE: "1" });
     expect(csp).toContain("http://*.s3.localhost.localstack.cloud:4566");
     expect(csp).not.toContain("upgrade-insecure-requests");
+  });
+
+  it("allows Clerk's blob: workers, and only from self or blob:", () => {
+    expect(buildCsp({})).toContain("; worker-src 'self' blob:;");
   });
 
   it("allows Cloudflare Turnstile only when its site key is set", () => {

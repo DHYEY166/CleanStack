@@ -49,6 +49,9 @@ export function buildCsp(env: EnvSource = process.env): string {
     "img-src 'self' data: blob: https:",
     `connect-src ${connectSrc.join(" ")}`,
     turnstile ? `frame-src ${TURNSTILE_ORIGIN}` : "frame-src 'none'",
+    // Clerk starts Web Workers from blob: URLs; without this the browser
+    // falls back to script-src (no blob:) and logs a CSP violation.
+    "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
