@@ -97,8 +97,10 @@ The profiler, ai-trigger and web app must share the same `WEBHOOK_SECRET`.
 
 | Rule | Schedule | API destination | Route |
 |---|---|---|---|
-| `cleanstack-reconciler-5min` | `rate(5 minutes)` | `cleanstack-reconciler-destination` | `/api/cron/reconcile-runs`: marks runs stuck for 20 minutes as `failed` |
-| `cleanstack-purge-guests-hourly` | `rate(1 hour)` | `cleanstack-purge-guests-destination` | `/api/cron/purge-guests`: erases up to 20 expired guests per call |
+| `cleanstack-reconciler-5min` | `cron(0 */4 * * ? *)` | `cleanstack-reconciler-destination` | `/api/cron/reconcile-runs`: marks runs stuck for 20 minutes as `failed` |
+| `cleanstack-purge-guests-hourly` | `cron(0 */4 * * ? *)` | `cleanstack-purge-guests-destination` | `/api/cron/purge-guests`: erases up to 20 expired guests per call |
+
+Both rules run every 4 hours (00:00, 04:00, ... UTC). The names are from the original 5-minute and hourly schedules. The reconciler used to wake the database every 5 minutes, so the Aurora Serverless v2 cluster `database-1` (minimum 0 ACU, auto-pause after 300 s) never paused, which cost about $45 a month. Now the cluster is paused most of the time, and the first request after a pause waits while it resumes (see [Aurora auto-pause](operations.md#aurora-auto-pause)).
 
 If you rotate `CRON_SECRET`, update the connection `cleanstack-reconciler-auth` at the same time as Vercel.
 

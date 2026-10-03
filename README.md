@@ -16,7 +16,7 @@ CleanStack cleans tabular files and documents with AI suggestions and human appr
 - **Pipelines and templates:** save the approved rules of a pipeline as a template and reuse it. A chat builder can draft pipelines and synthetic data.
 - **Schema drift alerts:** optional Slack webhook per pipeline.
 - **Usage controls:** monthly row quotas per plan (Free: 50,000 rows; plans are assigned by an admin, with no payment integration), Upstash rate limits, and an AI spend cap checked in Postgres before every Bedrock call.
-- **Guest access:** **Try as guest** on the landing and sign-in pages starts a 24-hour session with no account. **Try with sample data** loads a seeded demo template, so it makes no Bedrock call. Guests get 2 MB files, 3 uploads, 5,000 rows per run and 10 AI calls per hour, with $0.25 of AI spend per guest. AI-heavy or irreversible features (chat builder, auto-clean, training export, Slack alerts, templates, account deletion) are blocked for guests. A guest's data is erased after 24 hours. [Full limits](docs/security-model.md#guest-access)
+- **Guest access:** **Try as guest** on the landing and sign-in pages starts a 24-hour session with no account. **Try with sample data** loads a seeded demo template, so it makes no Bedrock call. Guests get 2 MB files, 3 uploads, 5,000 rows per run and 10 AI calls per hour, with $0.25 of AI spend per guest. AI-heavy or irreversible features (chat builder, auto-clean, training export, Slack alerts, templates, account deletion) are blocked for guests. A guest's data is erased by the purge that runs every 4 hours, once the 24-hour session has ended. [Full limits](docs/security-model.md#guest-access)
 
 ## Architecture
 
@@ -41,7 +41,7 @@ Data PR approval / auto-clean ──► SQS executor queue ──► Lambda exec
 
 Other services: Clerk (auth), Upstash Redis (rate limits and quota cache, which fail open when not configured) and Sentry (optional). AWS resources are configured by hand, and there is no infrastructure as code in this repo.
 
-A run moves through `pending → profiling → awaiting_ai → awaiting_approval → queued → running → completed | failed`. Execution is idempotent per run: the executor claims a run with a conditional `UPDATE`, so a duplicate SQS delivery is skipped. A stale run is marked failed after 20 minutes by `/api/cron/reconcile-runs`.
+A run moves through `pending → profiling → awaiting_ai → awaiting_approval → queued → running → completed | failed`. Execution is idempotent per run: the executor claims a run with a conditional `UPDATE`, so a duplicate SQS delivery is skipped. A run stuck for 20 minutes is marked failed by `/api/cron/reconcile-runs`, which runs every 4 hours.
 
 ## Local development
 
@@ -96,7 +96,7 @@ Vercel builds and deploys `main`. The Lambdas, migrations and AWS resources are 
 - applying migrations 001–003 (`run-migration.mjs`, or the RDS Data API from CloudShell);
 - the CloudShell zip-swap deploy for `cleanstack-profiler`, `cleanstack-executor`, `cleanstack-ai-trigger` and `cleanstack-drift`;
 - raw bucket CORS (PUT, GET, POST), the profiler trigger on all object create events, and processed bucket CORS;
-- EventBridge rules `cleanstack-reconciler-5min` (every 5 minutes) and `cleanstack-purge-guests-hourly` (every hour), which call the cron routes through API destinations as the `cleanstack-eventbridge-invoker` role;
+- EventBridge rules `cleanstack-reconciler-5min` and `cleanstack-purge-guests-hourly`, both now `cron(0 */4 * * ? *)` (every 4 hours, so Aurora can auto-pause), which call the cron routes through API destinations as the `cleanstack-eventbridge-invoker` role;
 - the S3 lifecycle rule on the `guest_` prefix;
 - least-privilege IAM for the `cleanstack-vercel` user and for the Lambda roles.
 
