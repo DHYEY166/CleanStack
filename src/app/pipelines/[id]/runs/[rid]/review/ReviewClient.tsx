@@ -15,6 +15,7 @@ import Nav from "@/components/Nav";
 import PRHeader from "@/components/DataPR/PRHeader";
 import RuleCard, { type RuleDecision } from "@/components/DataPR/RuleCard";
 import type { PipelineRun, TransformRule } from "@/lib/types";
+import { ruleGuardOf } from "@/lib/rule-guard";
 
 interface ReviewClientProps {
   pipelineId: string;
@@ -32,8 +33,18 @@ export default function ReviewClient({ pipelineId, run, rules }: ReviewClientPro
     setDecisions((prev) => new Map(prev).set(d.rule_id, d));
   }, []);
 
+  // Rules flagged by the bad-cell guard are left out of "Approve all": each one
+  // needs its own decision (src/lib/rule-guard.ts).
+  const flaggedCount = rules.filter((r) => ruleGuardOf(r.parameters)).length;
   function approveAll() {
-    setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "approved" as const, modifications: null }])));
+    setDecisions((prev) => {
+      const next = new Map(prev);
+      for (const r of rules) {
+        if (ruleGuardOf(r.parameters)) continue;
+        next.set(r.id, { rule_id: r.id, action: "approved" as const, modifications: null });
+      }
+      return next;
+    });
   }
   function rejectAll() {
     setDecisions(new Map(rules.map((r) => [r.id, { rule_id: r.id, action: "rejected" as const, modifications: null }])));
@@ -115,7 +126,7 @@ export default function ReviewClient({ pipelineId, run, rules }: ReviewClientPro
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-green-500/40 text-green-400 hover:bg-green-500/10 hover:border-green-500/60 text-sm font-medium rounded-lg transition-colors"
                 >
                   <CheckCheck className="h-4 w-4" aria-hidden="true" />
-                  Approve all
+                  {flaggedCount ? "Approve all unflagged" : "Approve all"}
                 </button>
                 <button
                   onClick={rejectAll}

@@ -110,7 +110,8 @@ def test_failed_rule_is_reported_and_frame_restored(executor):
     assert list(out.columns) == ["qty"]  # no stray sidecar from the half-applied rule
     assert out["qty"].tolist() == ["1", "2.5", "3"]
     assert res == [{"id": "r1", "rule_type": "type_cast", "column_name": "qty",
-                    "applied": False, "reason": res[0]["reason"]}]
+                    "applied": False, "reason": res[0]["reason"], "rows_removed": 0,
+                    "bad_cell_rows": 0}]
     assert res[0]["reason"].startswith("error:")
 
 

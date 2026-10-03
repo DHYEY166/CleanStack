@@ -660,6 +660,18 @@ COLUMN_REQUIRED_RULES = {
 
 ROW_LOSS_GUARD = 0.20  # per-rule maximum row loss for LOSS rules
 
+# Bad-cell guard. A row-removing rule is flagged when rows it removes are otherwise valid
+# and were removed only because ONE cell holds a placeholder (below) or, in a mostly numeric
+# column, a non-number. Must stay identical to PLACEHOLDER_TOKENS in src/lib/rule-guard.ts
+# (test_contracts.py), which flags the same rules in the Data PR before they are approved.
+PLACEHOLDER_TOKENS = frozenset({
+    ".", "..", "...", "-", "--", "---", "?", "??", "???",
+    "n/a", "na", "n.a.", "n.a", "#n/a", "null", "none", "nil", "nan", "missing",
+    "unknown", "undefined", "not available", "not applicable", "tbd", "tbc",
+    "#value!", "#ref!", "#div/0!", "#name?", "#num!", "#null!", "#error!",
+})
+BAD_CELL_GUARD_RULES = {"filter", "filter_extended", "drop_nulls"}
+
 
 class RuleSkipped(Exception):
     """Raised inside a rule branch when the rule cannot be applied safely; the frame is restored."""
@@ -669,6 +681,89 @@ def _add_sidecar(df: pd.DataFrame, col) -> None:
     sidecar = f"{SIDECAR_PREFIX}{col}"
     if sidecar not in df.columns:
         df[sidecar] = df[col]
+
+
+def _sidecar_base(name) -> str | None:
+    """'__orig_price' -> 'price'; None for a column that is not a sidecar."""
+    s = str(name)
+    return s[len(SIDECAR_PREFIX):] if s.startswith(SIDECAR_PREFIX) else None
+
+
+# A text value is "just the number" when it is a plain decimal literal: no whitespace,
+# thousands separators, currency, exponent or leading zeros ("007" and "02139" are kept
+# as text in the audit file because the zeros would be lost).
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:0|[1-9]\d*)(?:\.\d+)?")
+
+
+def _is_null(v) -> bool:
+    try:
+        return bool(pd.isna(v))
+    except (TypeError, ValueError):
+        return False  # list-like cell (JSON input): never null
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, (bool, np.bool_))
+
+
+def _value_preserved(orig, new) -> bool:
+    """True when ``new`` carries all the information of ``orig`` (no audit copy needed)."""
+    o_null, n_null = _is_null(orig), _is_null(new)
+    if o_null or n_null:
+        return o_null and n_null  # a value that appeared or disappeared is a change
+    if isinstance(orig, str):
+        if isinstance(new, str):
+            return orig == new
+        if _is_number(new):
+            return _PLAIN_NUMBER.fullmatch(orig) is not None and float(orig) == float(new)
+        return False
+    if _is_number(orig) and _is_number(new):
+        return float(orig) == float(new)
+    if type(orig) is not type(new) and (isinstance(orig, (bool, np.bool_)) or isinstance(new, (bool, np.bool_))):
+        return False
+    try:
+        return bool(orig == new)
+    except Exception:
+        return False
+
+
+def _column_changed_lossily(orig: pd.Series, new: pd.Series) -> bool:
+    if orig.equals(new):
+        return False
+    return not all(_value_preserved(o, n) for o, n in zip(orig.tolist(), new.tolist()))
+
+
+def _matches_null_value(v, null_values: list) -> bool:
+    """True when cell ``v`` equals one of ``null_values`` (text case-insensitively, numbers by value)."""
+    if _is_null(v):
+        return False
+    text = str(v).strip().lower()
+    for nv in null_values:
+        if text == str(nv).strip().lower():
+            return True
+        try:
+            if float(text) == float(nv):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def _drop_noop_sidecars(df: pd.DataFrame, before_cols) -> pd.DataFrame:
+    """Drop __orig_* columns a rule just added when no value in the column lost information.
+
+    Sidecars exist so the audit file can show what a lossy change replaced (a value that
+    became null, "$1,200" that became 1200). A cast of "34" to 34 loses nothing, so it
+    gets no copy.
+    """
+    noop = []
+    for c in df.columns:
+        base = _sidecar_base(c)
+        if base is None or c in before_cols or base not in df.columns:
+            continue
+        if not _column_changed_lossily(df[c], df[base]):
+            noop.append(c)
+    return df.drop(columns=noop) if noop else df
 
 
 def _row_loss_guard(before: pd.DataFrame, after: pd.DataFrame, rtype: str) -> None:
@@ -929,6 +1024,14 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
 
     if rtype == "type_cast":
         target = params.get("target_type", "str")
+        null_values = params.get("null_values")
+        if null_values:
+            # Placeholder codes the parser would accept as numbers (99999, -9999) or text it
+            # would not ("N/A") become null; the row is kept. The original goes to the sidecar.
+            if not isinstance(null_values, list):
+                null_values = [null_values]
+            _add_sidecar(df, col)
+            df[col] = df[col].where(~df[col].map(lambda v: _matches_null_value(v, null_values)), other=None)
         if target in ("float", "float64", "numeric", "number", "int", "int64", "datetime", "date", "timestamp"):
             _add_sidecar(df, col)
         if target in ("float", "float64", "numeric", "number"):
@@ -957,7 +1060,10 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
         new_name = params.get("new_name")
         if not new_name:
             raise RuleSkipped("missing new_name")
-        return df.rename(columns={col: new_name})
+        mapping = {col: new_name}
+        if f"{SIDECAR_PREFIX}{col}" in df.columns:
+            mapping[f"{SIDECAR_PREFIX}{col}"] = f"{SIDECAR_PREFIX}{new_name}"
+        return df.rename(columns=mapping)
 
     if rtype in ("filter", "filter_extended"):
         before = df
@@ -976,7 +1082,9 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
             num = _to_numeric_clean(series)
             v = float(value)
             mask = {"gt": num > v, "lt": num < v, "gte": num >= v, "lte": num <= v}[operator]
-            df = df[mask]
+            # A missing or unparseable cell ("." placeholder) is not "out of range": keep the
+            # row. Only rows holding a number that fails the comparison are removed.
+            df = df[mask | num.isna()]
         elif rtype == "filter_extended" and operator == "contains":
             df = df[series.astype(str).str.contains(str(value), na=False, regex=False)]
         elif rtype == "filter_extended" and operator == "not_contains":
@@ -1024,10 +1132,14 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
     if rtype == "trim_whitespace":
         targets = [col] if (col and col in df.columns) else _text_cols(df)
         for c in targets:
-            present = df[c].notna()
-            stripped = df[c][present].astype(str).str.strip()
+            # Only text values are stripped. Numbers in a mixed column (Excel cells holding
+            # 34 next to a "." placeholder) stay numbers instead of becoming "34".
+            is_str = df[c].map(lambda v: isinstance(v, str))
+            if not is_str.any():
+                continue
+            stripped = df[c][is_str].str.strip()
             new_col = df[c].astype(object).copy()
-            new_col[present] = stripped.where(stripped != "", other=None)
+            new_col[is_str] = stripped.where(stripped != "", other=None)
             df[c] = new_col
         return df
 
@@ -1110,7 +1222,18 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
             s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
             s = re.sub(r'_+', '_', s)
             return s.lower().strip('_')
-        rename_map = {c: _to_snake(str(c)) for c in df.columns if _to_snake(str(c)) != str(c)}
+        # Sidecars are renamed with their column ("__orig_Acceptance Rate(%)" ->
+        # "__orig_acceptance_rate"). Snake-casing the sidecar name itself would strip the
+        # "__" prefix, and the copy would leak into the deliverable as "orig_<col>".
+        rename_map = {}
+        for c in df.columns:
+            if _sidecar_base(c) is not None:
+                continue
+            new_name = _to_snake(str(c))
+            if new_name != str(c):
+                rename_map[c] = new_name
+                if f"{SIDECAR_PREFIX}{c}" in df.columns:
+                    rename_map[f"{SIDECAR_PREFIX}{c}"] = f"{SIDECAR_PREFIX}{new_name}"
         if rename_map:
             df = df.rename(columns=rename_map)
         return df
@@ -1168,34 +1291,111 @@ def _apply_rule(df: pd.DataFrame, rtype: str, col, params: dict) -> pd.DataFrame
     raise RuleSkipped(f"unsupported rule type {rtype!r}")
 
 
-def apply_transforms(df: pd.DataFrame, rules: list[dict], results: list | None = None) -> pd.DataFrame:
+def _blank(v) -> bool:
+    return _is_null(v) or (isinstance(v, str) and v.strip() == "")
+
+
+def _is_bad_cell(v, mostly_numeric: bool) -> bool:
+    """A placeholder token, or a non-number in a mostly numeric column. Blanks are not bad cells."""
+    if _blank(v) or _is_number(v) or isinstance(v, (bool, np.bool_)):
+        return False
+    s = str(v).strip()
+    if s.lower() in PLACEHOLDER_TOKENS:
+        return True
+    return mostly_numeric and pd.isna(_to_numeric_clean(pd.Series([s])).iloc[0])
+
+
+def _mostly_numeric(values: pd.Series) -> bool:
+    present = values[~values.map(_blank)]
+    if len(present) < 2:
+        return False
+    return bool(_to_numeric_clean(present).notna().mean() >= 0.5)
+
+
+def bad_cell_rows(before: pd.DataFrame, after: pd.DataFrame, rtype: str, col) -> int:
+    """Rows a rule removed only because of one bad cell in ``col`` (see PLACEHOLDER_TOKENS).
+
+    A removed row counts when its ``col`` value (or, if a cast already blanked it, the original
+    kept in the sidecar) is a bad cell and the rest of the row is mostly filled in. Rows that are
+    mostly empty, rows removed for a real value ("deleted", 0, out of range) and blank cells
+    removed by drop_nulls do not count, so legitimate filters are never flagged.
+    """
+    if rtype not in BAD_CELL_GUARD_RULES or not col or col not in before.columns:
+        return 0
+    if not after.index.isin(before.index).all():
+        return 0  # the rule rebuilt the index: not a row selection we can attribute
+    removed = before.loc[~before.index.isin(after.index)]
+    if removed.empty:
+        return 0
+    sidecar = f"{SIDECAR_PREFIX}{col}"
+
+    def original(frame: pd.DataFrame) -> pd.Series:
+        if sidecar not in frame.columns:
+            return frame[col]
+        return frame[col].where(~frame[col].map(_is_null), frame[sidecar])
+
+    mostly_numeric = _mostly_numeric(original(before))
+    others = [c for c in before.columns if c != col and _sidecar_base(c) is None]
+    if not others:
+        return 0  # a single-column file: the bad cell is the whole row
+    need = max(1, (len(others) + 1) // 2)
+    filled = removed[others].apply(lambda r: sum(not _blank(v) for v in r), axis=1)
+    bad = original(removed).map(lambda v: _is_bad_cell(v, mostly_numeric))
+    return int((bad & (filled >= need)).sum())
+
+
+def apply_transforms(df: pd.DataFrame, rules: list[dict], results: list | None = None,
+                     skip_bad_cell_rules: bool = False) -> pd.DataFrame:
     """Apply rules in order.
 
     A rule that is skipped or raises leaves the frame exactly as it was before that rule
-    (no half-applied changes, no stray sidecar columns). When ``results`` is given, one entry
-    per rule is appended: {"id", "rule_type", "column_name", "applied", "reason"}.
+    (no half-applied changes, no stray sidecar columns). A sidecar a rule added is dropped
+    again when no value in its column lost information. When ``results`` is given, one entry
+    per rule is appended: {"id", "rule_type", "column_name", "applied", "reason",
+    "rows_removed"}. Only rules that select rows (drop_nulls, filter, deduplicate, ...) can
+    remove rows; every removal is counted and logged, never silent.
+
+    Each entry also has "bad_cell_rows": rows the rule removed (or, when skipped by the
+    guard, would have removed) only because of one bad cell (bad_cell_rows()). With
+    ``skip_bad_cell_rules`` (auto mode, where no person approved the rule) such a rule is
+    skipped and the rows are kept; otherwise it is applied as approved and reported.
     """
     for rule in rules:
         rtype = rule["rule_type"]
         col = rule.get("column_name")
         params = _parse_params(rule.get("parameters"))
         snapshot = df.copy()
-        applied, reason = True, None
+        before_cols = set(df.columns)
+        rows_before = len(df)
+        applied, reason, bad_rows = True, None, 0
         try:
             if rtype not in SUPPORTED_TABULAR_RULES:
                 raise RuleSkipped(f"unsupported rule type {rtype!r}")
             if rtype in COLUMN_REQUIRED_RULES and (not col or col not in df.columns):
                 raise RuleSkipped(f"column {col!r} not found")
-            df = _apply_rule(df, rtype, col, params)
+            df = _drop_noop_sidecars(_apply_rule(df, rtype, col, params), before_cols)
+            bad_rows = bad_cell_rows(snapshot, df, rtype, col)
+            if bad_rows and skip_bad_cell_rules:
+                raise RuleSkipped(
+                    f"guard: would remove {bad_rows} row(s) only because of one bad cell in {col!r} "
+                    "(a placeholder or non-number); the rows were kept. Convert that value to blank "
+                    "instead (type_cast with null_values)."
+                )
         except RuleSkipped as e:
             df, applied, reason = snapshot, False, str(e)
         except Exception as e:  # unexpected failure: restore and report, never silently half-apply
             df, applied, reason = snapshot, False, f"error: {type(e).__name__}: {e}"[:500]
+        rows_removed = rows_before - len(df)
         if not applied:
             print(f"[executor] rule {rtype} on {col} not applied: {reason}")
+        elif rows_removed:
+            print(f"[executor] rule {rtype} on {col} removed {rows_removed} of {rows_before} rows")
+        if applied and bad_rows:
+            print(f"[executor] WARNING rule {rtype} on {col} removed {bad_rows} row(s) only because of one bad cell")
         if results is not None:
             results.append({"id": rule.get("id"), "rule_type": rtype, "column_name": col,
-                            "applied": applied, "reason": reason})
+                            "applied": applied, "reason": reason, "rows_removed": rows_removed,
+                            "bad_cell_rows": bad_rows})
     return df
 
 
@@ -1308,7 +1508,9 @@ def _record_rule_results(cur, results: list) -> None:
             continue
         cur.execute(
             "UPDATE transform_rules SET parameters = COALESCE(parameters, '{}'::jsonb) || %s::jsonb WHERE id = %s",
-            (json.dumps({"_execution": {"applied": r["applied"], "reason": r["reason"]}}), r["id"]),
+            (json.dumps({"_execution": {"applied": r["applied"], "reason": r["reason"],
+                                        "rows_removed": int(r.get("rows_removed") or 0),
+                                        "bad_cell_rows": int(r.get("bad_cell_rows") or 0)}}), r["id"]),
         )
 
 
@@ -1512,7 +1714,9 @@ def process_run(run_id: str, receive_count: int = 1) -> dict:
         else:
             df = load_raw_dataframe(file_bytes, fmt)
             input_row_count = len(df)
-            df = apply_transforms(df, rules, rule_results)
+            # Auto mode: nobody approved the rules, so a rule that would drop rows only
+            # because of one bad cell is skipped (bad_cell_rows()).
+            df = apply_transforms(df, rules, rule_results, skip_bad_cell_rules=auto_mode)
 
             # Row count guard for auto-mode passes 2+ — abort if >10% rows deleted
             if auto_mode and iteration > 1 and row_count_raw:

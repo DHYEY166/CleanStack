@@ -66,4 +66,26 @@ describe("POST /api/auto-validate/[runId]", () => {
     const fail = queryOne.mock.calls.find((c) => String(c[0]).includes("SET status = 'failed'"))!;
     expect(fail[1]).toEqual([RUN, "queued", body.error]);
   });
+
+  it("never auto-approves a rule the bad-cell guard flagged, even if every judge approves", async () => {
+    query.mockResolvedValue([
+      { id: "r1", rule_type: "trim_whitespace", column_name: "name", ai_reasoning: "x", parameters: {} },
+      { id: "r2", rule_type: "filter", column_name: "score", ai_reasoning: "y",
+        parameters: { operator: "neq", value: ".", _guard: { reason: "one bad cell", values: ["."] } } },
+    ]);
+    generateText.mockResolvedValue({
+      text: JSON.stringify({ votes: [
+        { rule_id: "r1", vote: "APPROVE", reason: "ok" },
+        { rule_id: "r2", vote: "APPROVE", reason: "ok" },
+      ] }),
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+    const res = await call();
+    const body = await res.json();
+    expect(body.approved).toBe(1);
+    expect(body.details.approved).toEqual(["r1"]);
+    const reject = queryOne.mock.calls.find((c) => String(c[0]).includes("status = 'rejected'"))!;
+    expect(reject[1][0]).toBe("r2");
+    expect(JSON.parse(reject[1][1])._reject_reasons[0]).toBe("Guard: one bad cell");
+  });
 });

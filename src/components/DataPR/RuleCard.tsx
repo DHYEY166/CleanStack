@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type { TransformRule } from "@/lib/types";
+import { removesRows, type TransformRule } from "@/lib/types";
+import { ruleGuardOf } from "@/lib/rule-guard";
 
 type Decision = "approved" | "rejected";
 
@@ -40,6 +41,10 @@ export default function RuleCard({ rule, onChange }: RuleCardProps) {
     }
   }
 
+  const guard = ruleGuardOf(rule.parameters);
+  // Internal keys (_guard, _execution, ...) are not user parameters.
+  const visibleParams = Object.entries(rule.parameters ?? {}).filter(([k]) => !k.startsWith("_"));
+
   const borderColor =
     decision === "approved"
       ? "border-green-500/50"
@@ -68,6 +73,14 @@ export default function RuleCard({ rule, onChange }: RuleCardProps) {
                 {rule.column_name}
               </code>
             )}
+            {removesRows(rule.rule_type) && (
+              <span
+                className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-400/10 text-amber-300"
+                title="This rule deletes whole rows from the output. The run page shows how many it removed."
+              >
+                removes rows
+              </span>
+            )}
             {decision && (
               <span
                 className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -83,6 +96,16 @@ export default function RuleCard({ rule, onChange }: RuleCardProps) {
 
           {rule.ai_reasoning && (
             <p className="text-gray-400 text-xs mb-2">{rule.ai_reasoning}</p>
+          )}
+
+          {guard && (
+            <div
+              role="alert"
+              className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+            >
+              <span className="font-medium text-amber-300">Removes rows because of one bad cell. </span>
+              {guard.reason} Not included in &quot;Approve all&quot;; approve it on its own if you really want these rows gone.
+            </div>
           )}
 
           {/* Inline params editor */}
@@ -114,9 +137,9 @@ export default function RuleCard({ rule, onChange }: RuleCardProps) {
             </div>
           )}
 
-          {!editing && rule.parameters && Object.keys(rule.parameters).length > 0 && (
+          {!editing && visibleParams.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
-              {Object.entries(rule.parameters).map(([k, v]) => (
+              {visibleParams.map(([k, v]) => (
                 <span
                   key={k}
                   className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded"
