@@ -16,7 +16,7 @@ import {
 import Nav from "@/components/Nav";
 import { queryOne, query } from "@/lib/db";
 import type { PipelineRun, DataProfile, TransformRule } from "@/lib/types";
-import { isApprovedButNotApplied, ruleExecution } from "@/lib/types";
+import { badCellRowsByRules, isApprovedButNotApplied, ruleExecution, rowsRemovedByRules } from "@/lib/types";
 import QualityGauge from "@/components/QualityGauge";
 import ColumnStatsTable from "@/components/ColumnStatsTable";
 import QualityTrendChart from "@/components/QualityTrendChart";
@@ -103,6 +103,8 @@ export default async function RunDetailPage({
   ]);
 
   const canDownload = run.status === "completed" && !!run.processed_s3_key;
+  const rowsRemoved = rowsRemovedByRules(rules);
+  const badCells = badCellRowsByRules(rules);
 
   // % improvement = (this_pass_processed - parent_processed) / parent_processed * 100
   const iterationImprovement =
@@ -231,6 +233,24 @@ export default async function RunDetailPage({
               <div>
                 <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">{run.mode === "document" ? "Lines (processed)" : "Rows (processed)"}</div>
                 <div className="text-white font-medium tabular-nums">{Number(run.row_count_processed).toLocaleString()}</div>
+              </div>
+            )}
+            {run.mode !== "document" && rowsRemoved > 0 && (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">Rows removed by rules</div>
+                <div className="text-amber-300 font-medium tabular-nums">{rowsRemoved.toLocaleString()}</div>
+              </div>
+            )}
+            {run.mode !== "document" && badCells.removed > 0 && (
+              <div title="Rows a rule removed only because one cell held a placeholder or a non-number">
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">Removed for one bad cell</div>
+                <div className="text-amber-300 font-medium tabular-nums">{badCells.removed.toLocaleString()}</div>
+              </div>
+            )}
+            {run.mode !== "document" && badCells.kept > 0 && (
+              <div title="Rows a rule would have removed only because of one bad cell; the guard skipped the rule">
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-1.5">Kept by bad-cell guard</div>
+                <div className="text-white font-medium tabular-nums">{badCells.kept.toLocaleString()}</div>
               </div>
             )}
           </div>
@@ -380,6 +400,7 @@ export default async function RunDetailPage({
                       {rule.ai_reasoning && (
                         <p className="text-gray-400 text-sm leading-relaxed">{rule.ai_reasoning}</p>
                       )}
+                      <RowsRemovedNote parameters={rule.parameters} />
                       {isApprovedButNotApplied(rule) && (
                         <p className="mt-1.5 text-xs text-amber-300">
                           Not applied{ruleExecution(rule.parameters)?.reason ? `: ${ruleExecution(rule.parameters)?.reason}` : ""}
@@ -451,5 +472,19 @@ export default async function RunDetailPage({
         )}
       </main>
     </div>
+  );
+}
+
+/** "Removed N rows" under a rule that removed rows, so no row disappears silently. */
+function RowsRemovedNote({ parameters }: { parameters: Record<string, unknown> | null }) {
+  const exec = ruleExecution(parameters);
+  const removed = exec?.rows_removed ?? 0;
+  const bad = exec?.applied ? exec.bad_cell_rows ?? 0 : 0;
+  if (removed <= 0) return null;
+  return (
+    <p className="mt-1.5 text-xs text-amber-300">
+      Removed {removed.toLocaleString()} {removed === 1 ? "row" : "rows"}
+      {bad > 0 && `, ${bad.toLocaleString()} of them only because of one bad cell (a placeholder or non-number)`}
+    </p>
   );
 }

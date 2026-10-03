@@ -14,6 +14,7 @@ import { aiLimiter, checkRateLimit } from "@/lib/rate-limit";
 export const maxDuration = 300;
 import { z } from "zod";
 import { queryOne, query } from "@/lib/db";
+import { applyRuleGuard } from "@/lib/rule-guard";
 import type { DataProfile, PipelineRun, PipelineTemplate, TemplateRule } from "@/lib/types";
 import { requireEnv, optionalEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
@@ -505,8 +506,8 @@ For every column in the profile, work through ALL of the following checks. Do no
     → filter with operator "gt", value "0" (or appropriate threshold)
   - Ratings/scores outside valid range (e.g. rating = -1, rating = 99 when scale is 0–5)?
     → filter with operator "gt"/"lt" as needed
-  - Sentinel/placeholder values like 99999, 9999, -9999 in numeric columns?
-    → filter to exclude them
+  - Sentinel/placeholder values (e.g. "N/A", "-", "?", 99999, -9999) in a mostly-numeric column?
+    → type_cast to "int"/"float" so they become null and the row is kept; list numeric codes in "null_values" (e.g. {"target_type": "int", "null_values": [99999]}). Filter the row only if the whole row is invalid.
   - Future dates in a "created_at" or "signup_date" column that should be historical?
     → filter with operator "lt" and today's date
 - When suggesting outlier_cap for a column with a known valid domain range, ALWAYS include explicit min_val and/or max_val in parameters instead of relying solely on IQR.
@@ -689,8 +690,12 @@ For each rule, write ai_reasoning as one precise sentence that references the sp
     return NextResponse.json({ error: "No rules generated" }, { status: 500 });
   }
 
+  // Deterministic check before the rules are shown: flag row-removing rules that
+  // would drop rows only because of one bad cell (src/lib/rule-guard.ts).
+  const guardedRules = applyRuleGuard(output.rules, columnStats);
+
   await Promise.all(
-    output.rules.map((rule, idx) =>
+    guardedRules.map((rule, idx) =>
       queryOne(
         `INSERT INTO transform_rules
            (pipeline_id, run_id, rule_type, column_name, parameters, ai_reasoning, status, order_index)

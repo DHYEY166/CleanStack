@@ -71,6 +71,13 @@ export interface ColumnStat {
 export interface RuleExecutionResult {
   applied: boolean;
   reason: string | null;
+  /** Rows this rule removed; null for runs executed before the executor recorded it. */
+  rows_removed: number | null;
+  /**
+   * Rows the rule removed (or, if the bad-cell guard skipped it, would have removed) only
+   * because of one bad cell. Null for runs executed before the executor recorded it.
+   */
+  bad_cell_rows: number | null;
 }
 
 /** Execution outcome recorded by the executor, or null if the rule has not run yet. */
@@ -79,7 +86,43 @@ export function ruleExecution(parameters: Record<string, unknown> | null | undef
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.applied !== "boolean") return null;
-  return { applied: r.applied, reason: typeof r.reason === "string" ? r.reason : null };
+  const count = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null);
+  return {
+    applied: r.applied,
+    reason: typeof r.reason === "string" ? r.reason : null,
+    rows_removed: count(r.rows_removed),
+    bad_cell_rows: count(r.bad_cell_rows),
+  };
+}
+
+/** Rule types that select rows and can therefore remove whole rows from the output. */
+export const ROW_REMOVING_RULES: ReadonlySet<string> = new Set([
+  "drop_nulls", "deduplicate", "semantic_deduplicate", "filter", "filter_extended",
+]);
+
+export function removesRows(ruleType: string): boolean {
+  return ROW_REMOVING_RULES.has(ruleType);
+}
+
+/** Total rows the executor recorded as removed by these rules (0 when none were recorded). */
+export function rowsRemovedByRules(rules: { parameters: Record<string, unknown> | null }[]): number {
+  return rules.reduce((sum, r) => sum + (ruleExecution(r.parameters)?.rows_removed ?? 0), 0);
+}
+
+/**
+ * Bad-cell guard totals for a run: rows removed only because of one bad cell by rules that
+ * were applied, and rows such rules would have removed but the guard kept (auto mode).
+ */
+export function badCellRowsByRules(rules: { parameters: Record<string, unknown> | null }[]): { removed: number; kept: number } {
+  let removed = 0;
+  let kept = 0;
+  for (const r of rules) {
+    const e = ruleExecution(r.parameters);
+    if (!e?.bad_cell_rows) continue;
+    if (e.applied) removed += e.bad_cell_rows;
+    else kept += e.bad_cell_rows;
+  }
+  return { removed, kept };
 }
 
 /** An approved rule the executor skipped (it changed nothing in the output). */

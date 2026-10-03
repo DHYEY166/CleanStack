@@ -40,3 +40,11 @@ def test_committee_has_no_thresholds_for_unimplemented_rules(executor):
 def test_sidecar_prefix_matches_typescript(executor):
     src = (REPO / "src/lib/sidecar.ts").read_text()
     assert f'SIDECAR_PREFIX = "{executor.SIDECAR_PREFIX}"' in src
+
+
+def test_placeholder_tokens_match_typescript(executor):
+    """The bad-cell guard flags the same placeholders in the Data PR and in the executor."""
+    src = (REPO / "src/lib/rule-guard.ts").read_text()
+    block = src[src.index("PLACEHOLDER_TOKENS"):]
+    block = block[block.index("["):block.index("];")]
+    assert set(re.findall(r'"([^"]*)"', block)) == set(executor.PLACEHOLDER_TOKENS)

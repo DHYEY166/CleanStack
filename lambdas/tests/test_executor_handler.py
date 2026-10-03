@@ -108,6 +108,7 @@ def test_success_writes_clean_deliverable_records_results_and_purges_raw(executo
     results = [json.loads(p[0]) for q, p in cur.sql if q.startswith("UPDATE transform_rules")]
     assert results[0]["_execution"]["applied"] is True
     assert results[1]["_execution"]["applied"] is False
+    assert all(r["_execution"]["rows_removed"] == 0 for r in results)
     assert any("SET status = 'completed'" in q for q in _statuses(cur))
     # all versions + delete markers under the run prefix (incl. extracted_text.txt) deleted
     deleted = s3.delete_objects.call_args.kwargs["Delete"]["Objects"]
@@ -168,13 +169,24 @@ def test_every_record_in_a_batch_is_processed(executor):
 
 def test_audit_file_written_when_sidecars_exist(executor):
     cur = FakeCursor()
-    cur.rules = [("rule-1", "type_cast", "b", {"target_type": "float"})]
+    cur.rules = [("rule-1", "type_cast", "a", {"target_type": "float"})]  # " x " -> null: lossy
     s3 = _s3()
     with mock.patch.object(executor, "get_db_conn", return_value=FakeConn(cur)), mock.patch.object(executor, "s3", s3):
         executor.handler(_event(), None)
     puts = {c.kwargs["Key"]: c.kwargs["Body"] for c in s3.put_object.call_args_list}
     assert b"__orig_" not in puts["processed/pipe-1/run-1/output.csv"]
-    assert b"__orig_b" in puts["processed/pipe-1/run-1/audit.csv"]
+    assert b"__orig_a" in puts["processed/pipe-1/run-1/audit.csv"]
+
+
+def test_no_audit_file_for_a_lossless_cast(executor):
+    cur = FakeCursor()
+    cur.rules = [("rule-1", "type_cast", "b", {"target_type": "float"})]  # 1, 2 -> 1.0, 2.0
+    s3 = _s3()
+    with mock.patch.object(executor, "get_db_conn", return_value=FakeConn(cur)), mock.patch.object(executor, "s3", s3):
+        executor.handler(_event(), None)
+    keys = [c.kwargs["Key"] for c in s3.put_object.call_args_list]
+    assert "processed/pipe-1/run-1/output.csv" in keys
+    assert "processed/pipe-1/run-1/audit.csv" not in keys
 
 
 def test_purge_falls_back_to_current_versions_when_listing_denied(executor):

@@ -11,6 +11,7 @@ import type { TransformRule, DataProfile } from "@/lib/types";
 import { requireEnv, optionalEnv, awsRegion } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { EXECUTOR_QUEUE_FAILED_MESSAGE, failRunAfterQueueError, queueErrorResponse } from "@/lib/queue-failure";
+import { ruleGuardOf } from "@/lib/rule-guard";
 
 const log = logger.child({ route: "POST /api/auto-validate" });
 
@@ -244,7 +245,12 @@ ${responseFormat}`,
       .filter((v) => v?.vote === "REJECT")
       .map((v) => v!.reason);
 
-    if (approveCount >= threshold) {
+    // Rules the deterministic guard flagged (src/lib/rule-guard.ts) are never
+    // auto-approved: they would drop rows only because of one bad cell.
+    const guard = ruleGuardOf(rule.parameters);
+    if (guard) {
+      rejected.push({ id: rule.id, reasons: [`Guard: ${guard.reason}`, ...rejectReasons] });
+    } else if (approveCount >= threshold) {
       approved.push(rule.id);
     } else {
       rejected.push({ id: rule.id, reasons: rejectReasons });
