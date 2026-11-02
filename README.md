@@ -2,7 +2,9 @@
 
 CleanStack cleans tabular files and documents with AI suggestions and human approval. A Lambda profiles each upload. Claude on Amazon Bedrock then proposes transform rules, each with a reason, and you approve or reject them in a "Data PR". A second Lambda applies the approved rules with pandas and returns the cleaned file with a before/after quality score.
 
-**Live:** [clean-stack-eta.vercel.app](https://clean-stack-eta.vercel.app) · **Demo video:** [watch the 103-second walkthrough](https://clean-stack-eta.vercel.app/demo.mp4)
+**Live:** [clean-stack-eta.vercel.app](https://clean-stack-eta.vercel.app) · **Demo:** [full 103-second walkthrough](https://clean-stack-eta.vercel.app/demo.mp4)
+
+![CleanStack demo: 12 AI rules reviewed, approved, and the run completing at 24 to 20 rows with the quality score going from 89 to 99](public/demo.gif)
 
 ## Features
 
