@@ -4,17 +4,7 @@ CleanStack cleans tabular files and documents with AI suggestions and human appr
 
 **Live:** [clean-stack-eta.vercel.app](https://clean-stack-eta.vercel.app) · **Demo video:** [clean-stack-eta.vercel.app/demo.mp4](https://clean-stack-eta.vercel.app/demo.mp4)
 
-<!--TESTA-->
-<video src="https://media.githubusercontent.com/media/DHYEY166/CleanStack/main/public/demo.mp4" controls muted width="100%"></video>
-<!--TESTB-->
-<video src="https://raw.githubusercontent.com/DHYEY166/CleanStack/main/public/demo.mp4" controls muted width="100%"></video>
-<!--TESTC-->
-<video src="https://clean-stack-eta.vercel.app/demo.mp4" controls muted width="100%"></video>
-<!--TESTD-->
-<video src="public/demo.mp4" controls muted width="100%"></video>
-<!--TESTE-->
-<video src="https://github.com/DHYEY166/CleanStack/raw/main/public/demo.mp4" controls muted width="100%"></video>
-<!--ENDA-->
+<video src="https://clean-stack-eta.vercel.app/demo.mp4" controls muted playsinline width="100%"></video>
 
 ## Features
 
