@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Sync fallback (original behavior)
-  const baseUrl = optionalEnv("NEXT_PUBLIC_APP_URL") ?? "https://clean-stack-eta.vercel.app";
+  const baseUrl = requireEnv("NEXT_PUBLIC_APP_URL");
   const res = await fetch(`${baseUrl}/api/suggest-transforms`, {
     method: "POST",
     headers: {

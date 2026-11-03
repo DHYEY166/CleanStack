@@ -2,7 +2,11 @@
 
 CleanStack cleans tabular files and documents with AI suggestions and human approval. A Lambda profiles each upload. Claude on Amazon Bedrock then proposes transform rules, each with a reason, and you approve or reject them in a "Data PR". A second Lambda applies the approved rules with pandas and returns the cleaned file with a before/after quality score.
 
-**Live:** [clean-stack-eta.vercel.app](https://clean-stack-eta.vercel.app) · **Demo video:** [watch the 103-second walkthrough](https://clean-stack-eta.vercel.app/demo.mp4)
+> **The hosted demo has been retired.** The former Vercel deployment and its AWS backend have been shut down, so there is no live instance. The recording below shows the app as it ran. To try CleanStack, self-host it with the steps in [Self-hosting / Setup](#self-hosting--setup).
+
+**Demo:** [full 103-second walkthrough (MP4, 3.6 MB)](docs/demo.mp4)
+
+![CleanStack demo: 12 AI rules reviewed, approved, and the run completing at 24 to 20 rows with the quality score going from 89 to 99](public/demo.gif)
 
 ## Features
 
@@ -19,7 +23,7 @@ CleanStack cleans tabular files and documents with AI suggestions and human appr
 ## Architecture
 
 ```
-Browser ── Next.js 16 on Vercel (Clerk auth, API routes) ── Aurora PostgreSQL (RDS Data API)
+Browser ── Next.js 16 (Clerk auth, API routes) ── Aurora PostgreSQL (RDS Data API)
    │ presigned POST (size-capped)            presigned GET (downloads) ◄── S3 processed bucket
    ▼
 S3 raw bucket ── S3 event ──► Lambda profiler ──► webhook ──► suggest-transforms (Bedrock Claude)
@@ -30,7 +34,7 @@ Data PR approval / auto-clean ──► SQS executor queue ──► Lambda exec
 
 | Part | Code | Runs on |
 |---|---|---|
-| Web app and API | `src/` (App Router) | Vercel |
+| Web app and API | `src/` (App Router) | Any Next.js host (formerly Vercel) |
 | Profiler | `lambdas/profiler/handler.py` | Lambda, S3 trigger on the raw bucket |
 | AI trigger | `lambdas/ai-trigger/handler.py` | Lambda, SQS AI jobs queue; calls `/api/suggest-transforms` |
 | Executor | `lambdas/executor/handler.py` | Lambda, SQS executor queue |
@@ -41,18 +45,95 @@ Other services: Clerk (auth), Upstash Redis (rate limits and quota cache, which 
 
 A run moves through `pending → profiling → awaiting_ai → awaiting_approval → queued → running → completed | failed`. Execution is idempotent per run: the executor claims a run with a conditional `UPDATE`, so a duplicate SQS delivery is skipped. A run stuck for 20 minutes is marked failed by `/api/cron/reconcile-runs`, which runs every 4 hours.
 
-## Local development
+## Self-hosting / Setup
 
-Requirements: Node.js 20 or 22, Python 3.12 and Docker (for the test services). The app has no local mock stack. Running it against real data needs Aurora, S3, SQS, Bedrock and Clerk.
+Everything below comes from the code in this repo. AWS resources are created by hand (there is no infrastructure as code); [docs/deployment.md](docs/deployment.md) has the full detail for each step.
+
+### Prerequisites
+
+- Node.js 20 or 22, and Python 3.12 (Lambdas and their tests).
+- Docker, only for the integration/e2e test services.
+- An AWS account with: Aurora PostgreSQL Serverless v2 with the RDS Data API enabled and a Secrets Manager secret for its credentials, two S3 buckets (raw and processed), SQS, SNS, Lambda, EventBridge, and Amazon Bedrock access to Claude Sonnet 4.6 (`us.anthropic.claude-sonnet-4-6`, set in `src/lib/ai-config.ts`).
+- A Clerk application (auth, required).
+- Optional: Upstash Redis (rate limits and quota cache), Sentry (error reporting), Cloudflare Turnstile (guest sign-up).
+
+There is no local mock stack: the running app talks to real Aurora, S3, SQS, Bedrock and Clerk.
+
+### 1. Install and configure
 
 ```bash
 npm ci
-cp .env.example .env.local     # fill in real values
-npm run dev                    # http://localhost:3000
-AURORA_HOST=<cluster endpoint> node src/lib/migrations/run-migration.mjs   # schema + migrations
+cp .env.example .env.local     # then fill in real values
 ```
 
-`run-migration.mjs` applies `schema.sql` and then each migration in order. Every statement is idempotent. It uses RDS IAM auth, or `DATABASE_URL` for a plain Postgres.
+`src/lib/env.ts` is the full contract, and `.env.example` lists every variable (a test enforces this). At startup the server logs any variable that is missing or invalid.
+
+| Variable | Required | Description |
+|---|---|---|
+| `AWS_REGION` | No | Region for S3, SQS, RDS Data API and Bedrock (default `us-east-1`) |
+| `AURORA_CLUSTER_ARN` | Yes | Aurora Serverless v2 cluster ARN (RDS Data API) |
+| `AURORA_SECRET_ARN` | Yes | Secrets Manager ARN with the database credentials |
+| `S3_RAW_BUCKET` | Yes | Bucket that receives uploads and triggers the profiler |
+| `S3_PROCESSED_BUCKET` | Yes | Bucket the executor writes cleaned files to |
+| `SQS_QUEUE_URL` | Yes | Executor queue; without it approved runs complete without executing |
+| `AI_QUEUE_ENABLED` | No | `true` to enqueue AI suggestion jobs instead of calling suggest-transforms inline |
+| `AI_JOBS_QUEUE_URL` | When `AI_QUEUE_ENABLED=true` | AI jobs queue consumed by the ai-trigger Lambda |
+| `NEXT_PUBLIC_APP_URL` | Yes | Public base URL of the app, used for internal webhook calls |
+| `WEBHOOK_SECRET` | Yes | Shared secret between the Lambdas and the webhook routes (≥ 32 chars, `openssl rand -hex 32`) |
+| `CRON_SECRET` | Yes | Bearer secret for `/api/cron/*` (≥ 32 chars) |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Yes | Clerk keys |
+| `ADMIN_SECRET` | No | `x-admin-secret` for `/api/admin/*`; admin routes are disabled when unset (≥ 32 chars) |
+| `ADMIN_EMAILS`, `ADMIN_USER_IDS` | No | Comma-separated emails / Clerk user ids treated as admins (billing bypass) |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | No | Rate limiting and quota cache; both are off when unset |
+| `GUEST_COOKIE_SECRET` | No | Signs guest session cookies; guest access is off when unset or shorter than 32 chars |
+| `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | No | Cloudflare Turnstile on "Try as guest" (set both or neither) |
+| `MAX_UPLOAD_MB` | No | Per-file upload limit for signed-in users (default 100; guests are fixed at 2). Keep equal on the profiler Lambda |
+| `LOG_LEVEL` | No | `debug`, `info`, `warn` or `error` (default `info`) |
+| `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN` | No | Server/edge and browser Sentry DSNs |
+
+AWS credentials are read by the AWS SDK from its standard sources (for example `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`); the permissions needed are listed under [IAM](docs/deployment.md#iam). `CLEANSTACK_TEST_MODE`, `DB_DRIVER` and `DATABASE_URL` are for the test suites only, and the `AURORA_HOST`/`AURORA_PORT`/`AURORA_USER`/`AURORA_DB`/`RDS_CA_BUNDLE` block is read only by the migration runner.
+
+### 2. Create the database schema
+
+```bash
+AURORA_HOST=<cluster endpoint> RDS_CA_BUNDLE=/path/to/global-bundle.pem \
+  node src/lib/migrations/run-migration.mjs
+```
+
+`run-migration.mjs` applies `src/lib/schema.sql` and then `src/lib/migrations/001_indexes.sql`, `002_ai_usage_tables.sql` and `003_guest_sessions.sql` in order. Every statement is idempotent. It connects with RDS IAM auth (`AURORA_USER` default `postgres`, `AURORA_DB` default `cleanstack`), or with `DATABASE_URL` for a plain Postgres; `MIGRATIONS_ONLY=1` skips `schema.sql`. Without IAM auth you can apply the files through the RDS Data API from CloudShell ([Option B](docs/deployment.md#database-migrations)). Starter templates are in `src/lib/seed-templates.sql`.
+
+### 3. Run the web app
+
+```bash
+npm run dev                    # http://localhost:3000
+npm run build && npm start     # production build
+```
+
+### 4. Deploy the AWS backend
+
+1. **S3:** a raw and a processed bucket. Raw bucket CORS allows `PUT`, `GET` and `POST` from the app origin; processed bucket CORS allows `GET`. Optionally add a lifecycle rule that expires the `guest_` prefix after 1 day.
+2. **SQS:** an executor queue (visibility timeout ≥ the executor's timeout, with a dead-letter queue) and, if you set `AI_QUEUE_ENABLED=true`, an AI jobs queue.
+3. **SNS:** a drift topic.
+4. **Lambdas** (Python 3.12, `handler.handler`), each packaged as its `handler.py` plus its pinned `requirements.txt`. The profiler and executor also need the `AWSSDKPandas-Python312` layer, which provides pandas and numpy. ai-trigger uses only the standard library.
+
+   | Function | Code | Trigger | Environment |
+   |---|---|---|---|
+   | profiler | `lambdas/profiler/` | Raw bucket event notification on **all object create events** (`s3:ObjectCreated:*`) | `DATABASE_URL` (IAM token auth), `APP_URL`, `WEBHOOK_SECRET`, `MAX_UPLOAD_MB`, `SENTRY_DSN`, `AWS_REGION` |
+   | ai-trigger | `lambdas/ai-trigger/` | AI jobs queue; POSTs to `$APP_URL/api/suggest-transforms` | `APP_URL`, `WEBHOOK_SECRET` |
+   | executor | `lambdas/executor/` | Executor queue (`BatchSize: 1`) | `DB_SECRET_ARN`, `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET`, `SNS_DRIFT_TOPIC_ARN`, `SENTRY_DSN`, `AWS_REGION`; tuning: `EXECUTOR_MAX_ATTEMPTS`, `SEMANTIC_DEDUP_MAX_ROWS`, `SEMANTIC_DEDUP_BUDGET_S`, `EXECUTOR_RESERVE_S` |
+   | drift | `lambdas/drift/` | Drift SNS topic; posts to a pipeline's Slack webhook | `DB_SECRET_ARN`, `AWS_REGION` |
+
+   The profiler, ai-trigger and web app must share the same `WEBHOOK_SECRET`, and `APP_URL` must be the app's public URL so the Lambdas can reach its webhook routes. `SENTRY_DSN` is optional everywhere.
+5. **Schedules:** `GET /api/cron/reconcile-runs` (marks runs stuck for 20 minutes as failed) and `GET /api/cron/purge-guests` (erases expired guest data) both require `Authorization: Bearer $CRON_SECRET`. `vercel.json` defines no crons; the original setup used EventBridge rules with API destinations, every 4 hours ([details](docs/deployment.md#aws-setup)).
+6. **IAM:** least-privilege policies for the web app's credentials and each Lambda role are listed in [docs/deployment.md](docs/deployment.md#iam).
+
+Lambda tests run locally without AWS:
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -r lambdas/requirements-dev.txt
+python -m pytest lambdas/tests
+```
 
 ## Tests
 
@@ -68,37 +149,9 @@ npm run e2e:build && PYTHON=python npm run test:e2e               # Playwright a
 
 No test calls real AWS, Bedrock or Clerk. CI (`.github/workflows/ci.yml`) runs 6 checks on every PR and on every push to `main`: `web (node 20)`, `web (node 22)`, `lambdas (pandas 2.2.3)`, `lambdas (pandas 3.0.6)`, `integration (postgres + localstack)` and `e2e (playwright)`. `main` requires all six, and a branch must be up to date with `main` before it can merge. See [CONTRIBUTING.md](CONTRIBUTING.md) for what each suite covers and for the test-mode switches.
 
-## Configuration
+## Further docs
 
-`src/lib/env.ts` is the full contract, and `.env.example` lists every variable (a test enforces this). At startup the server logs any variable that is missing or invalid.
-
-| Variable | Notes |
-|---|---|
-| `AURORA_CLUSTER_ARN`, `AURORA_SECRET_ARN` | Required. RDS Data API |
-| `S3_RAW_BUCKET`, `S3_PROCESSED_BUCKET` | Required |
-| `SQS_QUEUE_URL` | Required. Executor queue |
-| `AI_QUEUE_ENABLED`, `AI_JOBS_QUEUE_URL` | Optional. Queue AI jobs instead of calling suggest-transforms inline |
-| `NEXT_PUBLIC_APP_URL`, `WEBHOOK_SECRET`, `CRON_SECRET` | Required. Secrets need at least 32 chars (`openssl rand -hex 32`) |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Required |
-| `GUEST_COOKIE_SECRET` | Optional. Guest access is off while it is unset |
-| `TURNSTILE_SECRET_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | Optional. Cloudflare Turnstile on guest sign-up |
-| `MAX_UPLOAD_MB` | Optional. Default 100 for signed-in users (guests are always 2 MB). Keep it equal on the profiler Lambda |
-| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`, `ADMIN_SECRET`, `ADMIN_EMAILS`, `ADMIN_USER_IDS`, `AWS_REGION`, `LOG_LEVEL` | Optional |
-
-The Bedrock model id and token prices live in `src/lib/ai-config.ts`. Lambda variables are listed in [docs/deployment.md](docs/deployment.md#lambda-environment).
-
-## Deployment
-
-Vercel builds and deploys `main`. The Lambdas, migrations and AWS resources are deployed by hand. [docs/deployment.md](docs/deployment.md) covers:
-
-- applying migrations 001–003 (`run-migration.mjs`, or the RDS Data API from CloudShell);
-- the CloudShell zip-swap deploy for `cleanstack-profiler`, `cleanstack-executor`, `cleanstack-ai-trigger` and `cleanstack-drift`;
-- raw bucket CORS (PUT, GET, POST), the profiler trigger on all object create events, and processed bucket CORS;
-- EventBridge rules `cleanstack-reconciler-5min` and `cleanstack-purge-guests-hourly`, both now `cron(0 */4 * * ? *)` (every 4 hours, so Aurora can auto-pause), which call the cron routes through API destinations as the `cleanstack-eventbridge-invoker` role;
-- the S3 lifecycle rule on the `guest_` prefix;
-- least-privilege IAM for the `cleanstack-vercel` user and for the Lambda roles.
-
-Operations runbook: [docs/operations.md](docs/operations.md). Security model: [docs/security-model.md](docs/security-model.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+[docs/deployment.md](docs/deployment.md) covers migrations, the CloudShell zip-swap Lambda deploy, S3/SQS/EventBridge setup and IAM in more detail. Operations runbook: [docs/operations.md](docs/operations.md). Security model: [docs/security-model.md](docs/security-model.md). Transform rules: [docs/transform-rules.md](docs/transform-rules.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
 
