@@ -279,5 +279,5 @@
   <text x="870" y="753" fill="#475569" font-size="8">External service</text>
 
   <!-- Footer -->
-  <text x="560" y="790" text-anchor="middle" fill="#94a3b8" font-size="8.5">clean-stack-eta.vercel.app · github.com/DHYEY166/CleanStack · B2B Data Pipeline · Free 50K · Pro 1M · Team 10M rows/month</text>
+  <text x="560" y="790" text-anchor="middle" fill="#94a3b8" font-size="8.5">github.com/DHYEY166/CleanStack · B2B Data Pipeline · Free 50K · Pro 1M · Team 10M rows/month</text>
 </svg>

@@ -1,10 +1,12 @@
 # Deployment
 
-Vercel deploys the web app from `main`. Everything else in this guide is configured by hand in AWS, because the repo has no infrastructure as code. Replace `<...>` with your own values.
+> **Retired deployment.** The original Vercel + AWS deployment described here was shut down in November 2026, and its resources no longer exist. The names below (Vercel project, `cleanstack-*` functions and roles, `database-1`) record how it was set up. To run your own copy, start with [Self-hosting / Setup](../README.md#self-hosting--setup) in the README and use this guide for detail.
 
-## Web app (Vercel)
+The original deployment ran the web app on Vercel from `main`. Everything else in this guide is configured by hand in AWS, because the repo has no infrastructure as code. Replace `<...>` with your own values.
 
-Vercel runs `npm run build` on every push to `main`. The build needs no secrets, because configuration is validated per request. Set the variables from `src/lib/env.ts` in the Vercel project. The AWS SDK reads its credentials from the standard `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` variables, which belong to the `cleanstack-vercel` IAM user (see [IAM](#iam)).
+## Web app (Vercel, original host)
+
+Vercel ran `npm run build` on every push to `main`. The build needs no secrets, because configuration is validated per request. Set the variables from `src/lib/env.ts` in the Vercel project. The AWS SDK reads its credentials from the standard `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` variables, which belong to the `cleanstack-vercel` IAM user (see [IAM](#iam)).
 
 ## Database migrations
 
@@ -102,7 +104,7 @@ The profiler, ai-trigger and web app must share the same `WEBHOOK_SECRET`.
 
 Both rules run every 4 hours (00:00, 04:00, ... UTC). The names are from the original 5-minute and hourly schedules. The reconciler used to wake the database every 5 minutes, so the Aurora Serverless v2 cluster `database-1` (minimum 0 ACU, auto-pause after 300 s) never paused, which cost about $45 a month. Now the cluster is paused most of the time, and the first request after a pause waits while it resumes (see [Aurora auto-pause](operations.md#aurora-auto-pause)).
 
-If you rotate `CRON_SECRET`, update the connection `cleanstack-reconciler-auth` at the same time as Vercel.
+If you rotate `CRON_SECRET`, update the connection `cleanstack-reconciler-auth` at the same time as the web app.
 
 ## IAM
 
